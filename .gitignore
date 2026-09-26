@@ -5,3 +5,5 @@ data.json
 .env
 .env.*
 .DS_Store
+.direnv/
+result

@@ -5,7 +5,10 @@
   "description": "An ephemeral daily context panel for Obsidian",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "typecheck": "tsc -noEmit -skipLibCheck",
+    "dev:install": "node scripts/install-to-vault.mjs"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -13,6 +16,7 @@
     "esbuild": "latest",
     "obsidian": "latest",
     "tslib": "latest",
-    "typescript": "latest"
+    "typescript": "5.9.3",
+    "vitest": "latest"
   }
 }
