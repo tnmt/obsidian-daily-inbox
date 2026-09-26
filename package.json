@@ -1,0 +1,18 @@
+{
+  "name": "obsidian-daily-inbox",
+  "version": "0.0.1",
+  "private": true,
+  "description": "An ephemeral daily context panel for Obsidian",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "builtin-modules": "latest",
+    "esbuild": "latest",
+    "obsidian": "latest",
+    "tslib": "latest",
+    "typescript": "latest"
+  }
+}
