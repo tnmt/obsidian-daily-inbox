@@ -1,7 +1,7 @@
 {
   "id": "daily-inbox",
   "name": "Daily Inbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.5.0",
   "description": "Show context for the date of your Daily Note in a side panel.",
   "author": "tnmt",
