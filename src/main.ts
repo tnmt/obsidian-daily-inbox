@@ -504,6 +504,13 @@ export default class DailyInboxPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
       this.forEachView((view) => void view.refresh());
     }));
+    // active-leaf-change misses the case where a file is opened into the
+    // already-active leaf — e.g. OpenNoteAction reusing the main pane's most
+    // recent leaf while focus stays on the sidebar item that was clicked.
+    // file-open fires whenever the active file changes and covers that gap.
+    this.registerEvent(this.app.workspace.on("file-open", () => {
+      this.forEachView((view) => void view.refresh());
+    }));
     this.addCommand({
       id: "open-daily-inbox",
       name: "Open Daily Inbox",
