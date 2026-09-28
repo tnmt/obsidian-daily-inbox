@@ -149,6 +149,38 @@ Responsibilities:
 
 Date matching must be encapsulated because Dropbox metadata is not necessarily equivalent to EXIF capture time. v0.1 may use Camera Upload filename conventions with a documented fallback. EXIF extraction should only be added after real-world evidence shows it is needed.
 
+### Multi-folder search
+
+v0.1's original single hardcoded `folderPath` broke for a common real-world
+Dropbox setup: files older than some age get moved out of Camera Uploads into
+a yearly archive folder (e.g. `/Pictures/Archive/2025`). A Daily Note older
+than that cutoff found nothing, because its photos no longer lived under the
+one configured folder. This was found from real usage, not anticipated up
+front (#20).
+
+Resolution:
+
+- settings hold an ordered list of folder path templates (`folderPaths:
+  string[]`) instead of a single string; existing single-`folderPath`
+  installs migrate to a one-entry list on first load (`migrateDropboxSettings`
+  in `settings.ts`);
+- a template may contain a `{year}` placeholder, substituted with the local
+  4-digit year of `DailyContext.date` before listing — this matches a
+  per-year archive layout without requiring the user to add a new folder
+  entry every year (`folder-path-template.ts`);
+- each resolved path is listed and date-matched independently (mirroring the
+  original single-path logic); matched items from all folders are merged into
+  one result set;
+- a `not-found` result for one resolved path does not by itself fail the
+  call — it's tolerated as "no items from this folder", since with a
+  `{year}` template this is an expected steady state (e.g. a future or
+  not-yet-archived year has no such folder). If *every* configured path comes
+  back `not-found`, that's indistinguishable from a genuine
+  misconfiguration, so the `not-found` source error is still surfaced in
+  that case. Other errors (`auth-required`, `transient`) are not
+  folder-specific and always fail the whole `getItems()` call immediately,
+  per the existing per-source isolation model.
+
 ## Browser history source
 
 v0.2 adds a Chromium-history source: pages visited on the Daily Note's date, from

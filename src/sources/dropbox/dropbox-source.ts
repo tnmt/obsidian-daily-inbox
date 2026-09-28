@@ -16,6 +16,7 @@ import { CancelledError, throwIfAborted } from "./cancel";
 import { DropboxApiError, type HttpRequester } from "./http";
 import { DropboxSourceError } from "./errors";
 import { resolveEntryDate } from "./date-matching";
+import { resolveConfiguredFolderPaths } from "./folder-path-template";
 import { formatPhotoTime } from "./photo-time";
 import { withAuthRetry } from "./with-auth-retry";
 
@@ -28,6 +29,10 @@ const MAX_THUMBNAIL_BYTES = 20 * 1024 * 1024;
 function isThumbnailEligible(entry: DropboxFileEntry): boolean {
   const ext = entry.name.split(".").pop()?.toLowerCase();
   return !!ext && THUMBNAIL_SUPPORTED_EXTENSIONS.has(ext) && entry.size <= MAX_THUMBNAIL_BYTES;
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof DropboxApiError && err.status === 409 && !!err.errorSummary?.includes("not_found");
 }
 
 // Maps every failure that can reach getItems()/downloadOriginal() into the
@@ -46,7 +51,7 @@ function toSourceError(err: unknown): never {
         err,
       );
     }
-    if (err.status === 409 && err.errorSummary?.includes("not_found")) {
+    if (isNotFoundError(err)) {
       throw new DropboxSourceError("not-found", `Dropbox folder not found: ${err.message}`, err);
     }
     throw new DropboxSourceError("transient", `Dropbox API error: ${err.message}`, err);
@@ -61,11 +66,11 @@ export class DropboxSource implements ContextSource {
   constructor(
     private readonly http: HttpRequester,
     private readonly auth: DropboxAuthClient,
-    private readonly getFolderPath: () => string,
+    private readonly getFolderPaths: () => readonly string[],
   ) {}
 
   isAvailable(): boolean {
-    return this.auth.isConnected() && this.getFolderPath().trim().length > 0;
+    return this.auth.isConnected() && this.getFolderPaths().some((path) => path.trim().length > 0);
   }
 
   async getItems(context: DailyContext, signal: AbortSignal): Promise<ContextItem[]> {
@@ -78,18 +83,53 @@ export class DropboxSource implements ContextSource {
     }
   }
 
+  // Searches every configured folder (after {year}-template expansion)
+  // concurrently and merges their matches — folders are independent, like
+  // the thumbnail-batch chunks in fetchThumbnails below. A not_found result
+  // is tolerated per-folder rather than failing the whole call, since a
+  // {year}-templated archive folder for a not-yet-archived year is an
+  // expected steady state, not a misconfiguration (docs/architecture.md
+  // "Multi-folder search"). If every configured folder comes back
+  // not_found, that's indistinguishable from a genuine misconfiguration, so
+  // the error is surfaced in that case; any other error fails the whole
+  // call.
+  private async listMatchingEntries(
+    context: DailyContext,
+    signal: AbortSignal,
+  ): Promise<DropboxFileEntry[]> {
+    const paths = resolveConfiguredFolderPaths(this.getFolderPaths(), context.date);
+    const results = await Promise.allSettled(
+      paths.map((path) => this.listMatchingEntriesInFolder(path, context, signal)),
+    );
+
+    const matched: DropboxFileEntry[] = [];
+    let notFoundCount = 0;
+    let lastNotFoundError: unknown;
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        matched.push(...result.value);
+        continue;
+      }
+      if (!isNotFoundError(result.reason)) throw result.reason;
+      notFoundCount++;
+      lastNotFoundError = result.reason;
+    }
+    if (paths.length > 0 && notFoundCount === paths.length) throw lastNotFoundError;
+    return matched;
+  }
+
   // Filters per page as entries arrive rather than buffering the whole
   // folder listing, while still following every cursor to completion so a
   // day's results are never silently truncated (docs/dropbox-oauth-design.md #7).
   // Each page's request gets its own withAuthRetry so a 401 on, say, page 10
   // only redoes page 10, not the whole listing from page 1
   // (docs/dropbox-oauth-design.md #7).
-  private async listMatchingEntries(
+  private async listMatchingEntriesInFolder(
+    path: string,
     context: DailyContext,
     signal: AbortSignal,
   ): Promise<DropboxFileEntry[]> {
     const matched: DropboxFileEntry[] = [];
-    const path = this.getFolderPath();
     let page = await withAuthRetry(this.auth, signal, (token) => listFolder(this.http, token, path, signal));
     while (true) {
       throwIfAborted(signal);

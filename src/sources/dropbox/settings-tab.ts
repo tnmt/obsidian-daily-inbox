@@ -67,32 +67,67 @@ export function renderDropboxSettings(
         }),
     );
 
-  new Setting(containerEl)
-    .setName("Camera Uploads folder path")
-    .setDesc(
-      "The Dropbox folder to look for photos in. Full Dropbox access is required for this " +
-        "app because Camera Uploads lives outside any app-scoped folder — the token can read " +
-        "outside this folder as a result of that scope grant.",
-    )
-    .addText((text) => {
-      let committedFolderPath = host.settings.folderPath;
-      text
-        .setPlaceholder("/Camera Uploads")
-        .setValue(host.settings.folderPath)
-        .onChange(async (value) => {
-          host.settings.folderPath = value.trim();
-          await host.saveSettings();
-        });
-      // Re-query on blur rather than on every keystroke — the folder isn't
-      // "committed" until the user is done editing it.
-      text.inputEl.addEventListener("blur", () => {
-        if (host.settings.folderPath === committedFolderPath) return;
-        committedFolderPath = host.settings.folderPath;
-        rerender();
-      });
-    });
+  renderFolderPathsSetting(containerEl, host, rerender);
 
   syncWithAppKey = renderConnectionSetting(containerEl, host, rerender);
+}
+
+// Each row edits one entry of `folderPaths` independently; DropboxSource
+// searches all of them and merges results (docs/architecture.md "Multi-folder
+// search").
+function renderFolderPathsSetting(
+  containerEl: HTMLElement,
+  host: DropboxSettingsHost,
+  rerender: () => void,
+): void {
+  containerEl.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "Dropbox folders to look for photos in, searched independently with results merged. Use " +
+      '"{year}" in a path to track a per-year archive folder, e.g. "/Pictures/Archive/{year}". ' +
+      "Full Dropbox access is required for this app because Camera Uploads lives outside any " +
+      "app-scoped folder — the token can read outside these folders as a result of that scope grant.",
+  });
+
+  host.settings.folderPaths.forEach((path, index) => {
+    let committedValue = path;
+    new Setting(containerEl)
+      .setName(index === 0 ? "Folder" : `Folder ${index + 1}`)
+      .addText((text) => {
+        text
+          .setPlaceholder("/Camera Uploads")
+          .setValue(path)
+          .onChange(async (value) => {
+            host.settings.folderPaths[index] = value.trim();
+            await host.saveSettings();
+          });
+        // Re-query on blur rather than on every keystroke — the folder isn't
+        // "committed" until the user is done editing it.
+        text.inputEl.addEventListener("blur", () => {
+          if (host.settings.folderPaths[index] === committedValue) return;
+          committedValue = host.settings.folderPaths[index];
+          rerender();
+        });
+      })
+      .addExtraButton((button) =>
+        button
+          .setIcon("trash")
+          .setTooltip("Remove this folder")
+          .onClick(async () => {
+            host.settings.folderPaths.splice(index, 1);
+            await host.saveSettings();
+            rerender();
+          }),
+      );
+  });
+
+  new Setting(containerEl).addButton((button) =>
+    button.setButtonText("Add folder").onClick(async () => {
+      host.settings.folderPaths.push("");
+      await host.saveSettings();
+      rerender();
+    }),
+  );
 }
 
 function renderConnectionSetting(
