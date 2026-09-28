@@ -1,6 +1,6 @@
 {
   "name": "obsidian-daily-inbox",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "An ephemeral daily context panel for Obsidian",
   "scripts": {
