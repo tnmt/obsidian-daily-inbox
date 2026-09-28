@@ -7,6 +7,8 @@ import {
   encodePngWithCanvas,
   getBrowserImageClipboard,
 } from "./actions/copy-image-to-clipboard";
+import { DailyInboxRefresher, partitionItems } from "./daily-inbox-refresh";
+import type { SectionState, SourceSection } from "./daily-inbox-refresh";
 import { FileNameDateResolver } from "./domain";
 import type { ContextItem, DailyContext, LocalDate } from "./domain";
 import { DropboxAuthManager } from "./sources/dropbox/auth";
@@ -30,14 +32,6 @@ interface DailyInboxPluginData {
   dropbox: DropboxSettings;
   dropboxTokens?: DropboxTokens;
 }
-
-// The Dropbox section's own render state, independent of whether a Daily
-// Context could be resolved at all (main render() below handles that part).
-type DropboxSectionState =
-  | { readonly kind: "unavailable"; readonly status: DropboxSetupStatus }
-  | { readonly kind: "loading" }
-  | { readonly kind: "items"; readonly items: ContextItem[] }
-  | { readonly kind: "error"; readonly message: string };
 
 function describeDropboxError(err: unknown): string {
   if (err instanceof DropboxSourceError) {
@@ -69,12 +63,13 @@ function describeCopyError(err: unknown): string {
 
 class DailyInboxView extends ItemView {
   private readonly dateResolver = new FileNameDateResolver();
-  private refreshController?: AbortController;
+  private readonly refresher: DailyInboxRefresher;
+  private readonly sectionEls = new Map<SourceSection, HTMLElement>();
+  private context: DailyContext | undefined;
   private copyController?: AbortController;
-  private refreshSequence = 0;
   // active-leaf-change fires on plain focus changes too (switching panes,
   // focusing this view itself), not just when the resolved date changes.
-  // Skip re-querying Dropbox when neither the active file nor the date
+  // Skip re-querying sources when neither the active file nor the date
   // actually moved.
   private lastRefreshKey: string | undefined;
 
@@ -83,6 +78,10 @@ class DailyInboxView extends ItemView {
     private readonly plugin: DailyInboxPlugin,
   ) {
     super(leaf);
+    this.refresher = new DailyInboxRefresher(plugin.sourceSections, (section, state) => {
+      const el = this.sectionEls.get(section);
+      if (el && this.context) this.renderSection(el, section, state, this.context);
+    });
   }
 
   getViewType(): string { return DAILY_INBOX_VIEW_TYPE; }
@@ -94,11 +93,11 @@ class DailyInboxView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.refreshController?.abort();
+    this.refresher.cancel();
     this.copyController?.abort();
   }
 
-  /** Forces a re-query even if the active file/date key hasn't changed — used for manual refresh and when Dropbox settings or auth state change. */
+  /** Forces a re-query even if the active file/date key hasn't changed — used for manual refresh and when source settings or auth state change. */
   async forceRefresh(): Promise<void> {
     this.lastRefreshKey = undefined;
     await this.refresh();
@@ -111,45 +110,15 @@ class DailyInboxView extends ItemView {
     if (key === this.lastRefreshKey) return;
     this.lastRefreshKey = key;
 
-    const sequence = ++this.refreshSequence;
-    this.refreshController?.abort();
-    const controller = new AbortController();
-    this.refreshController = controller;
-    const context: DailyContext | undefined = date && activeFile ? { date, activeFile } : undefined;
-
-    if (!context) {
-      this.render(date, undefined);
-      return;
-    }
-
-    if (!this.plugin.dropboxSource.isAvailable()) {
-      const status = getDropboxSetupStatus(this.plugin.data.dropbox, this.plugin.dropboxAuth);
-      this.render(date, context, { kind: "unavailable", status });
-      return;
-    }
-
-    this.render(date, context, { kind: "loading" });
-    try {
-      const items = await this.plugin.dropboxSource.getItems(context, controller.signal);
-      if (this.isStale(controller, sequence)) return;
-      this.render(date, context, { kind: "items", items });
-    } catch (err) {
-      if (err instanceof CancelledError) return;
-      if (this.isStale(controller, sequence)) return;
-      this.render(date, context, { kind: "error", message: describeDropboxError(err) });
-    }
+    this.refresher.cancel();
+    this.context = date && activeFile ? { date, activeFile } : undefined;
+    this.render(date, this.context);
+    if (this.context) await this.refresher.refresh(this.context);
   }
 
-  private isStale(controller: AbortController, sequence: number): boolean {
-    return controller.signal.aborted || sequence !== this.refreshSequence;
-  }
-
-  private render(
-    date: LocalDate | undefined,
-    context: DailyContext | undefined,
-    dropbox?: DropboxSectionState,
-  ): void {
+  private render(date: LocalDate | undefined, context: DailyContext | undefined): void {
     this.contentEl.empty();
+    this.sectionEls.clear();
     this.renderHeader(date);
     if (!date || !context) {
       this.contentEl.createEl("p", { text: "No Daily Note date resolved." });
@@ -158,7 +127,9 @@ class DailyInboxView extends ItemView {
       });
       return;
     }
-    if (dropbox) this.renderDropboxSection(context, dropbox);
+    for (const section of this.refresher.sections) {
+      this.sectionEls.set(section, this.contentEl.createDiv({ cls: "daily-inbox-source" }));
+    }
   }
 
   // Sidebar leaves don't show the view header, so ItemView.addAction() icons
@@ -171,28 +142,39 @@ class DailyInboxView extends ItemView {
     refresh.addEventListener("click", () => void this.forceRefresh());
   }
 
-  private renderDropboxSection(context: DailyContext, state: DropboxSectionState): void {
-    const section = this.contentEl.createDiv({ cls: "daily-inbox-source" });
-    section.createEl("h3", { text: "Dropbox" });
+  private renderSection(
+    el: HTMLElement,
+    section: SourceSection,
+    state: SectionState,
+    context: DailyContext,
+  ): void {
+    el.empty();
+    el.createEl("h3", { text: section.source.name });
 
     if (state.kind === "unavailable") {
-      section.createEl("p", { text: describeDropboxUnavailable(state.status), cls: "daily-inbox-empty" });
+      el.createEl("p", { text: state.message, cls: "daily-inbox-empty" });
       return;
     }
     if (state.kind === "loading") {
-      section.createEl("p", { text: "Loading…", cls: "daily-inbox-empty" });
+      el.createEl("p", { text: "Loading…", cls: "daily-inbox-empty" });
       return;
     }
     if (state.kind === "error") {
-      section.createEl("p", { text: state.message, cls: "daily-inbox-error" });
+      el.createEl("p", { text: state.message, cls: "daily-inbox-error" });
       return;
     }
     if (state.items.length === 0) {
-      section.createEl("p", { text: "No photos for this date.", cls: "daily-inbox-empty" });
+      el.createEl("p", { text: section.emptyMessage, cls: "daily-inbox-empty" });
       return;
     }
-    const grid = section.createDiv({ cls: "daily-inbox-photo-grid" });
-    for (const item of state.items) {
+    const { images, others } = partitionItems(state.items);
+    if (images.length > 0) this.renderImageGrid(el, images, context);
+    if (others.length > 0) this.renderItemList(el, others);
+  }
+
+  private renderImageGrid(el: HTMLElement, items: ContextItem[], context: DailyContext): void {
+    const grid = el.createDiv({ cls: "daily-inbox-photo-grid" });
+    for (const item of items) {
       const cell = grid.createDiv({ cls: "daily-inbox-photo" });
       const label = item.title ?? item.id;
       const tooltip = item.subtitle ? `${label} · ${item.subtitle}` : label;
@@ -220,6 +202,15 @@ class DailyInboxView extends ItemView {
       if (item.subtitle) {
         cell.createDiv({ cls: "daily-inbox-photo-caption", text: item.subtitle });
       }
+    }
+  }
+
+  private renderItemList(el: HTMLElement, items: ContextItem[]): void {
+    const list = el.createEl("ul", { cls: "daily-inbox-item-list" });
+    for (const item of items) {
+      const entry = list.createEl("li", { cls: "daily-inbox-item" });
+      entry.createDiv({ cls: "daily-inbox-item-title", text: item.title ?? item.id });
+      if (item.subtitle) entry.createDiv({ cls: "daily-inbox-item-subtitle", text: item.subtitle });
     }
   }
 
@@ -280,6 +271,7 @@ export default class DailyInboxPlugin extends Plugin {
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
   copyImageAction!: CopyImageToClipboardAction;
+  sourceSections!: SourceSection[];
 
   async onload(): Promise<void> {
     const loaded = (await this.loadData()) as Partial<DailyInboxPluginData> | null;
@@ -298,6 +290,15 @@ export default class DailyInboxPlugin extends Plugin {
     this.dropboxAuth = new DropboxAuthManager(requestUrl, () => this.data.dropbox.clientId, persistence);
     this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPath);
     const dropboxSource = this.dropboxSource;
+    this.sourceSections = [
+      {
+        source: dropboxSource,
+        emptyMessage: "No photos for this date.",
+        describeUnavailable: () =>
+          describeDropboxUnavailable(getDropboxSetupStatus(this.data.dropbox, this.dropboxAuth)),
+        describeError: describeDropboxError,
+      },
+    ];
     this.copyImageAction = new CopyImageToClipboardAction(
       {
         canFetch: (item) => item.sourceId === dropboxSource.id,

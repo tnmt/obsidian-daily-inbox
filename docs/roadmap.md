@@ -36,15 +36,22 @@ Candidates, not commitments:
 - multi-select photos;
 - drag/drop or direct insertion;
 - more robust capture-date/EXIF handling;
-- caching/performance improvements;
-- Obsidian Notes source for notes created/modified on the date.
+- caching/performance improvements.
 
 Do not implement these merely because they are easy.
+
+## Planned sources
+
+The Daily Inbox view renders one section per Context Source, so each of these is added as a source without changing the view:
+
+- On this day: material from the same calendar date in earlier years;
+- Obsidian Notes: notes created/modified on the date;
+- Claude Code sessions active on the date;
+- Browser history / read-later items from the date.
 
 ## Later source candidates
 
 - GitHub activity;
-- read-later/history source;
 - lightweight capture source;
 - other photo providers.
 
