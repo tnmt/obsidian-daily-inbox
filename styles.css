@@ -54,3 +54,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.daily-inbox-photo.is-copyable {
+  cursor: pointer;
+}
+
+.daily-inbox-photo.is-copyable:hover .daily-inbox-photo-thumb,
+.daily-inbox-photo.is-copyable:focus-visible .daily-inbox-photo-thumb {
+  outline: 2px solid var(--interactive-accent);
+}

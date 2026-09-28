@@ -41,7 +41,7 @@ export interface ContextItem {
 export interface ContextAction {
   readonly id: string;
   canHandle(item: ContextItem): boolean;
-  run(item: ContextItem, context: DailyContext): Promise<void>;
+  run(item: ContextItem, context: DailyContext, signal: AbortSignal): Promise<void>;
 }
 
 export interface DateResolver {

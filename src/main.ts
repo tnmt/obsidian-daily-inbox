@@ -1,11 +1,19 @@
-import { ItemView, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl } from "obsidian";
+import { ItemView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl } from "obsidian";
 import type { App } from "obsidian";
+import {
+  ClipboardUnsupportedError,
+  CopyImageToClipboardAction,
+  ImageDecodeError,
+  encodePngWithCanvas,
+  getBrowserImageClipboard,
+} from "./actions/copy-image-to-clipboard";
 import { FileNameDateResolver } from "./domain";
 import type { ContextItem, DailyContext, LocalDate } from "./domain";
 import { DropboxAuthManager } from "./sources/dropbox/auth";
 import type { DropboxAuthPersistence, DropboxTokens } from "./sources/dropbox/auth";
 import { CancelledError } from "./sources/dropbox/cancel";
 import { DropboxSource } from "./sources/dropbox/dropbox-source";
+import type { DropboxImagePayload } from "./sources/dropbox/dropbox-source";
 import { DropboxSourceError } from "./sources/dropbox/errors";
 import { DEFAULT_DROPBOX_SETTINGS } from "./sources/dropbox/settings";
 import type { DropboxSettings } from "./sources/dropbox/settings";
@@ -43,9 +51,17 @@ function describeDropboxError(err: unknown): string {
   return "Unexpected error while querying Dropbox.";
 }
 
+function describeCopyError(err: unknown): string {
+  if (err instanceof DropboxSourceError) return describeDropboxError(err);
+  if (err instanceof ClipboardUnsupportedError) return err.message;
+  if (err instanceof ImageDecodeError) return "This photo's format cannot be copied to the clipboard.";
+  return "Could not copy the photo to the clipboard.";
+}
+
 class DailyInboxView extends ItemView {
   private readonly dateResolver = new FileNameDateResolver();
   private refreshController?: AbortController;
+  private copyController?: AbortController;
   private refreshSequence = 0;
   // active-leaf-change fires on plain focus changes too (switching panes,
   // focusing this view itself), not just when the resolved date changes.
@@ -68,7 +84,10 @@ class DailyInboxView extends ItemView {
     await this.refresh();
   }
 
-  async onClose(): Promise<void> { this.refreshController?.abort(); }
+  async onClose(): Promise<void> {
+    this.refreshController?.abort();
+    this.copyController?.abort();
+  }
 
   /** Forces a re-query even if the active file/date key hasn't changed — used when Dropbox settings or auth state change. */
   async forceRefresh(): Promise<void> {
@@ -130,10 +149,10 @@ class DailyInboxView extends ItemView {
       return;
     }
     this.contentEl.createEl("p", { text: `Daily Inbox: ${date}` });
-    this.renderDropboxSection(dropbox);
+    this.renderDropboxSection(context, dropbox);
   }
 
-  private renderDropboxSection(state: DropboxSectionState | undefined): void {
+  private renderDropboxSection(context: DailyContext, state: DropboxSectionState | undefined): void {
     const section = this.contentEl.createDiv({ cls: "daily-inbox-source" });
     section.createEl("h3", { text: "Dropbox" });
 
@@ -162,6 +181,18 @@ class DailyInboxView extends ItemView {
       const label = item.title ?? item.id;
       const tooltip = item.subtitle ? `${label} · ${item.subtitle}` : label;
       cell.setAttr("title", tooltip);
+      if (this.plugin.copyImageAction.canHandle(item)) {
+        cell.addClass("is-copyable");
+        cell.setAttr("role", "button");
+        cell.setAttr("tabindex", "0");
+        cell.setAttr("aria-label", `Copy ${label} to the clipboard`);
+        cell.addEventListener("click", () => this.copyItem(item, context));
+        cell.addEventListener("keydown", (evt) => {
+          if (evt.key !== "Enter" && evt.key !== " ") return;
+          evt.preventDefault();
+          this.copyItem(item, context);
+        });
+      }
       if (item.thumbnail) {
         const img = cell.createEl("img", { cls: "daily-inbox-photo-thumb" });
         img.src = item.thumbnail;
@@ -174,6 +205,28 @@ class DailyInboxView extends ItemView {
         cell.createDiv({ cls: "daily-inbox-photo-caption", text: item.subtitle });
       }
     }
+  }
+
+  // Must stay synchronous up to action.run(): the clipboard write has to start
+  // inside the click/keydown's user activation.
+  private copyItem(item: ContextItem, context: DailyContext): void {
+    this.copyController?.abort();
+    const controller = new AbortController();
+    this.copyController = controller;
+    const progress = new Notice("Copying photo…", 0);
+    this.plugin.copyImageAction.run(item, context, controller.signal).then(
+      () => {
+        progress.hide();
+        if (controller.signal.aborted) return;
+        new Notice("Photo copied. Paste it into your note.");
+      },
+      (err: unknown) => {
+        progress.hide();
+        if (err instanceof CancelledError || controller.signal.aborted) return;
+        console.error("Daily Inbox: failed to copy photo", err);
+        new Notice(describeCopyError(err));
+      },
+    );
   }
 }
 
@@ -210,6 +263,7 @@ export default class DailyInboxPlugin extends Plugin {
   data: DailyInboxPluginData = { dropbox: { ...DEFAULT_DROPBOX_SETTINGS } };
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
+  copyImageAction!: CopyImageToClipboardAction;
 
   async onload(): Promise<void> {
     const loaded = (await this.loadData()) as Partial<DailyInboxPluginData> | null;
@@ -227,6 +281,16 @@ export default class DailyInboxPlugin extends Plugin {
     };
     this.dropboxAuth = new DropboxAuthManager(requestUrl, () => this.data.dropbox.clientId, persistence);
     this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPath);
+    const dropboxSource = this.dropboxSource;
+    this.copyImageAction = new CopyImageToClipboardAction(
+      {
+        canFetch: (item) => item.sourceId === dropboxSource.id,
+        fetchOriginal: (item, signal) =>
+          dropboxSource.downloadOriginal(item.payload as DropboxImagePayload, signal),
+      },
+      getBrowserImageClipboard,
+      encodePngWithCanvas,
+    );
 
     this.registerView(DAILY_INBOX_VIEW_TYPE, (leaf) => new DailyInboxView(leaf, this));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
