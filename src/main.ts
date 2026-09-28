@@ -495,7 +495,11 @@ export default class DailyInboxPlugin extends Plugin {
         // (clicking inside it makes it the active leaf), replacing the panel
         // instead of opening the note in the main editor area.
         const leaf = this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ?? this.app.workspace.getLeaf(true);
-        await leaf.openFile(file);
+        // active: true reactivates the main leaf even though the click left
+        // focus on the sidebar, so active-leaf-change/file-open fire and the
+        // Daily Inbox re-queries against the newly opened date.
+        await leaf.openFile(file, { active: true });
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
       },
     };
     this.openNoteAction = new OpenNoteAction(noteOpener);
