@@ -2,34 +2,42 @@ import type { LocalDate } from "../../domain";
 
 export interface DateCandidate {
   readonly year: number;
-  readonly yearsAgo: number;
+  /**
+   * Year offset from the context date. Negative = past (e.g. -1 means "1 year
+   * ago"), positive = future (e.g. +1 means "1 year later"). Never 0 — the
+   * context date's own year is excluded.
+   */
+  readonly offset: number;
   readonly fileName: string;
 }
 
-function isLeapYear(year: number): boolean {
-  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-}
-
-function pad(value: number, width: number): string {
-  return String(value).padStart(width, "0");
-}
+const DAILY_NOTE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 
 /**
- * Candidate past-year Daily Note filenames for `date`, nearest year first.
- * Feb 29 only ever matches a leap year — non-leap years are skipped rather
- * than falling back to Feb 28.
+ * Picks the vault's `YYYY-MM-DD.md` filenames whose MM-DD matches `date` but
+ * whose year is different, and returns them past-first (nearest year ago →
+ * furthest ago) then future (nearest year later → furthest later). Callers
+ * pass the full daily-note filename list; the filter is done here so the
+ * matching rule stays testable without a Vault.
  */
-export function pastYearCandidates(date: LocalDate, yearsBack: number): DateCandidate[] {
+export function sameDateCandidates(date: LocalDate, fileNames: readonly string[]): DateCandidate[] {
   const [year, month, day] = date.split("-").map(Number);
-  const candidates: DateCandidate[] = [];
-  for (let yearsAgo = 1; yearsAgo <= yearsBack; yearsAgo++) {
-    const candidateYear = year - yearsAgo;
-    if (month === 2 && day === 29 && !isLeapYear(candidateYear)) continue;
-    candidates.push({
-      year: candidateYear,
-      yearsAgo,
-      fileName: `${pad(candidateYear, 4)}-${pad(month, 2)}-${pad(day, 2)}.md`,
-    });
+  const past: DateCandidate[] = [];
+  const future: DateCandidate[] = [];
+  // Same-named notes in different folders all resolve to one file via link
+  // resolution, so duplicates would render the same note twice.
+  for (const fileName of new Set(fileNames)) {
+    const match = DAILY_NOTE_PATTERN.exec(fileName);
+    if (!match) continue;
+    const fileYear = Number(match[1]);
+    const fileMonth = Number(match[2]);
+    const fileDay = Number(match[3]);
+    if (fileMonth !== month || fileDay !== day) continue;
+    if (fileYear === year) continue;
+    const offset = fileYear - year;
+    (offset < 0 ? past : future).push({ year: fileYear, offset, fileName });
   }
-  return candidates;
+  past.sort((a, b) => b.year - a.year);
+  future.sort((a, b) => a.year - b.year);
+  return [...past, ...future];
 }

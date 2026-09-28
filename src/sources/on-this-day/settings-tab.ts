@@ -8,8 +8,8 @@ export interface OnThisDaySettingsHost {
 
 // Renders into an existing PluginSettingTab's containerEl, following
 // dropbox/settings-tab.ts's plain-function + host interface pattern.
-// `rerender` is called after a field is committed (on blur), since a changed
-// yearsBack/heading changes what the next query returns.
+// `rerender` is called after the heading is committed (on blur), since a
+// changed heading changes what the next query returns.
 export function renderOnThisDaySettings(
   containerEl: HTMLElement,
   host: OnThisDaySettingsHost,
@@ -19,24 +19,10 @@ export function renderOnThisDaySettings(
   containerEl.createEl("p", {
     cls: "setting-item-description",
     text:
-      "Shows Daily Notes from the same calendar date in previous years, resolved by filename " +
-      "anywhere in the vault.",
-  });
-
-  new Setting(containerEl).setName("Years to look back").addText((text) => {
-    let committed = String(host.settings.yearsBack);
-    text.setValue(committed).onChange(async (value) => {
-      const parsed = Number.parseInt(value, 10);
-      if (!Number.isFinite(parsed) || parsed < 0) return;
-      host.settings.yearsBack = parsed;
-      await host.saveSettings();
-    });
-    text.inputEl.addEventListener("blur", () => {
-      const current = String(host.settings.yearsBack);
-      if (current === committed) return;
-      committed = current;
-      rerender();
-    });
+      "Shows every Daily Note in the vault that shares this date's month and day, " +
+      "resolved by filename anywhere in the vault. Past years are listed nearest first, " +
+      "then future years — useful when reviewing an older Daily Note and wanting to see " +
+      "the same date in later years, up to today.",
   });
 
   new Setting(containerEl)

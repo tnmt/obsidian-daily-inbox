@@ -539,6 +539,10 @@ export default class DailyInboxPlugin extends Plugin {
   /** Resolves/reads notes through the real Vault/MetadataCache, kept behind an interface so OnThisDaySource itself needs no Obsidian App to test. */
   private vaultAccess(): VaultAccess {
     return {
+      listDailyNoteFileNames: () =>
+        this.app.vault.getMarkdownFiles()
+          .map((file) => file.name)
+          .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name)),
       resolveDatedNote: (fileName, sourcePath) => {
         const dest = this.app.metadataCache.getFirstLinkpathDest(fileName.replace(/\.md$/, ""), sourcePath);
         if (!dest || dest.extension !== "md") return undefined;
@@ -564,12 +568,11 @@ export default class DailyInboxPlugin extends Plugin {
           {
             id: "on-this-day",
             name: "On this day",
-            getYearsBack: () => this.data.onThisDay.yearsBack,
             getExcerptHeading: () => this.data.onThisDay.excerptHeading,
           },
           this.vaultAccess(),
         ),
-        emptyMessage: "No Daily Notes from previous years on this date.",
+        emptyMessage: "No Daily Notes from other years on this date.",
         describeUnavailable: () => "On this day is unavailable.",
         describeError: describeOnThisDayError,
       },

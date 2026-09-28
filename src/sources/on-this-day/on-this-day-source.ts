@@ -1,6 +1,6 @@
 import type { ContextItem, ContextSource, DailyContext } from "../../domain";
 import { throwIfAborted } from "../dropbox/cancel";
-import { pastYearCandidates } from "./date-candidates";
+import { sameDateCandidates } from "./date-candidates";
 import type { DateCandidate } from "./date-candidates";
 import { extractExcerpt } from "./excerpt";
 import type { NoteHandle, VaultAccess } from "./vault-access";
@@ -12,12 +12,15 @@ export interface OnThisDayItemPayload {
 export interface OnThisDaySourceConfig {
   readonly id: string;
   readonly name: string;
-  getYearsBack(): number;
   getExcerptHeading(): string;
 }
 
-function yearsAgoLabel(yearsAgo: number): string {
-  return yearsAgo === 1 ? "1 year ago" : `${yearsAgo} years ago`;
+function offsetLabel(offset: number): string {
+  if (offset < 0) {
+    const yearsAgo = -offset;
+    return yearsAgo === 1 ? "1 year ago" : `${yearsAgo} years ago`;
+  }
+  return offset === 1 ? "1 year later" : `${offset} years later`;
 }
 
 function isResolved(
@@ -48,7 +51,8 @@ export class OnThisDaySource implements ContextSource {
   async getItems(context: DailyContext, signal: AbortSignal): Promise<ContextItem[]> {
     const heading = this.config.getExcerptHeading();
     const sourcePath = context.activeFile?.path ?? "";
-    const resolved = pastYearCandidates(context.date, this.config.getYearsBack())
+    const candidates = sameDateCandidates(context.date, this.vault.listDailyNoteFileNames());
+    const resolved = candidates
       .map((candidate) => ({
         candidate,
         note: this.vault.resolveDatedNote(candidate.fileName, sourcePath),
@@ -56,8 +60,8 @@ export class OnThisDaySource implements ContextSource {
       .filter(isResolved);
     throwIfAborted(signal);
     // Reads are independent, so they run concurrently — Promise.all keeps
-    // the result order matching `resolved` (nearest year first) regardless
-    // of which read settles first.
+    // the result order matching `resolved` (past first, then future,
+    // nearest year within each) regardless of which read settles first.
     const items = await Promise.all(
       resolved.map(async ({ candidate, note }): Promise<ContextItem> => {
         const content = await this.vault.readNote(note);
@@ -69,7 +73,7 @@ export class OnThisDaySource implements ContextSource {
           type: "note",
           title: candidate.fileName.replace(/\.md$/, ""),
           subtitle: excerpt.length > 0 ? excerpt : undefined,
-          groupLabel: yearsAgoLabel(candidate.yearsAgo),
+          groupLabel: offsetLabel(candidate.offset),
           payload,
         };
       }),
