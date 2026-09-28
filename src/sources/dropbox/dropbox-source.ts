@@ -16,6 +16,7 @@ import { CancelledError, throwIfAborted } from "./cancel";
 import { DropboxApiError, type HttpRequester } from "./http";
 import { DropboxSourceError } from "./errors";
 import { resolveEntryDate } from "./date-matching";
+import { formatPhotoTime } from "./photo-time";
 import { withAuthRetry } from "./with-auth-retry";
 
 export interface DropboxImagePayload {
@@ -149,12 +150,14 @@ export class DropboxSource implements ContextSource {
 
   private toContextItem(entry: DropboxFileEntry, thumbnail: string | undefined): ContextItem {
     const payload: DropboxImagePayload = { path: entry.path_lower };
+    const timestamp = new Date(entry.client_modified ?? entry.server_modified);
     return {
       id: entry.id,
       sourceId: this.id,
       type: "image",
-      timestamp: new Date(entry.client_modified ?? entry.server_modified),
+      timestamp,
       title: entry.name,
+      subtitle: formatPhotoTime(entry.name, timestamp),
       thumbnail,
       payload,
     };
