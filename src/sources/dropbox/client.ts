@@ -123,7 +123,7 @@ export async function getThumbnailBatch(
     "content",
     "files/get_thumbnail_batch",
     accessToken,
-    { entries: paths.map((path) => ({ path, format: "jpeg", size: "w128h128", mode: "strict" })) },
+    { entries: paths.map((path) => ({ path, format: "jpeg", size: "w256h256", mode: "strict" })) },
     signal,
   );
 }
