@@ -1,4 +1,4 @@
-import { ItemView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl } from "obsidian";
+import { ItemView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
 import type { App } from "obsidian";
 import {
   ClipboardUnsupportedError,
@@ -83,7 +83,6 @@ class DailyInboxView extends ItemView {
     private readonly plugin: DailyInboxPlugin,
   ) {
     super(leaf);
-    this.addAction("refresh-cw", "Refresh", () => void this.forceRefresh());
   }
 
   getViewType(): string { return DAILY_INBOX_VIEW_TYPE; }
@@ -151,7 +150,7 @@ class DailyInboxView extends ItemView {
     dropbox?: DropboxSectionState,
   ): void {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "Daily Inbox" });
+    this.renderHeader(date);
     if (!date || !context) {
       this.contentEl.createEl("p", { text: "No Daily Note date resolved." });
       this.contentEl.createEl("p", {
@@ -159,8 +158,17 @@ class DailyInboxView extends ItemView {
       });
       return;
     }
-    this.contentEl.createEl("p", { text: `Daily Inbox: ${date}` });
     if (dropbox) this.renderDropboxSection(context, dropbox);
+  }
+
+  // Sidebar leaves don't show the view header, so ItemView.addAction() icons
+  // would be invisible there; the refresh button lives in the content instead.
+  private renderHeader(date: LocalDate | undefined): void {
+    const header = this.contentEl.createDiv({ cls: "daily-inbox-header" });
+    header.createEl("h2", { text: date ?? "Daily Inbox" });
+    const refresh = header.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Refresh" } });
+    setIcon(refresh, "refresh-cw");
+    refresh.addEventListener("click", () => void this.forceRefresh());
   }
 
   private renderDropboxSection(context: DailyContext, state: DropboxSectionState): void {

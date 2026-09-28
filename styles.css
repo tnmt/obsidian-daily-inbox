@@ -1,3 +1,15 @@
+.daily-inbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 1rem;
+}
+
+.daily-inbox-header h2 {
+  margin: 0;
+}
+
 .daily-inbox-source {
   margin-bottom: 1.25rem;
 }
