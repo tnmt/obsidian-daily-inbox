@@ -2,6 +2,7 @@ import { Notice, Setting } from "obsidian";
 import type { ButtonComponent } from "obsidian";
 import type { DropboxAuthManager } from "./auth";
 import type { DropboxSettings } from "./settings";
+import { describeDropboxSetupStatus, getDropboxSetupStatus } from "./setup-status";
 
 export interface DropboxSettingsHost {
   readonly settings: DropboxSettings;
@@ -73,6 +74,7 @@ export function renderDropboxSettings(
         "outside this folder as a result of that scope grant.",
     )
     .addText((text) => {
+      let committedFolderPath = host.settings.folderPath;
       text
         .setPlaceholder("/Camera Uploads")
         .setValue(host.settings.folderPath)
@@ -82,7 +84,11 @@ export function renderDropboxSettings(
         });
       // Re-query on blur rather than on every keystroke — the folder isn't
       // "committed" until the user is done editing it.
-      text.inputEl.addEventListener("blur", () => rerender());
+      text.inputEl.addEventListener("blur", () => {
+        if (host.settings.folderPath === committedFolderPath) return;
+        committedFolderPath = host.settings.folderPath;
+        rerender();
+      });
     });
 
   connectButton = renderConnectionSetting(containerEl, host, rerender);
@@ -93,7 +99,7 @@ function renderConnectionSetting(
   host: DropboxSettingsHost,
   rerender: () => void,
 ): ButtonComponent | undefined {
-  const status = host.auth.isConnected() ? "Connected" : "Not connected";
+  const status = describeDropboxSetupStatus(getDropboxSetupStatus(host.settings, host.auth));
   const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(status);
 
   if (host.auth.isConnected()) {

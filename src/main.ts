@@ -19,6 +19,8 @@ import { DEFAULT_DROPBOX_SETTINGS } from "./sources/dropbox/settings";
 import type { DropboxSettings } from "./sources/dropbox/settings";
 import { renderDropboxSettings } from "./sources/dropbox/settings-tab";
 import type { DropboxSettingsHost } from "./sources/dropbox/settings-tab";
+import { getDropboxSetupStatus } from "./sources/dropbox/setup-status";
+import type { DropboxSetupStatus } from "./sources/dropbox/setup-status";
 
 export * from "./domain";
 
@@ -32,7 +34,7 @@ interface DailyInboxPluginData {
 // The Dropbox section's own render state, independent of whether a Daily
 // Context could be resolved at all (main render() below handles that part).
 type DropboxSectionState =
-  | { readonly kind: "unavailable" }
+  | { readonly kind: "unavailable"; readonly status: DropboxSetupStatus }
   | { readonly kind: "loading" }
   | { readonly kind: "items"; readonly items: ContextItem[] }
   | { readonly kind: "error"; readonly message: string };
@@ -41,7 +43,7 @@ function describeDropboxError(err: unknown): string {
   if (err instanceof DropboxSourceError) {
     switch (err.kind) {
       case "auth-required":
-        return "Dropbox re-authentication is required. Check the plugin settings.";
+        return "Dropbox re-authentication is required. Reconnect it in Settings → Daily Inbox.";
       case "not-found":
         return "The configured Dropbox folder was not found.";
       case "transient":
@@ -49,6 +51,13 @@ function describeDropboxError(err: unknown): string {
     }
   }
   return "Unexpected error while querying Dropbox.";
+}
+
+function describeDropboxUnavailable(status: DropboxSetupStatus): string {
+  if (status === "missing-folder") {
+    return "No Dropbox folder is configured. Set one in Settings → Daily Inbox.";
+  }
+  return "Dropbox is not connected. Connect it in Settings → Daily Inbox.";
 }
 
 function describeCopyError(err: unknown): string {
@@ -74,6 +83,7 @@ class DailyInboxView extends ItemView {
     private readonly plugin: DailyInboxPlugin,
   ) {
     super(leaf);
+    this.addAction("refresh-cw", "Refresh", () => void this.forceRefresh());
   }
 
   getViewType(): string { return DAILY_INBOX_VIEW_TYPE; }
@@ -89,7 +99,7 @@ class DailyInboxView extends ItemView {
     this.copyController?.abort();
   }
 
-  /** Forces a re-query even if the active file/date key hasn't changed — used when Dropbox settings or auth state change. */
+  /** Forces a re-query even if the active file/date key hasn't changed — used for manual refresh and when Dropbox settings or auth state change. */
   async forceRefresh(): Promise<void> {
     this.lastRefreshKey = undefined;
     await this.refresh();
@@ -114,7 +124,8 @@ class DailyInboxView extends ItemView {
     }
 
     if (!this.plugin.dropboxSource.isAvailable()) {
-      this.render(date, context, { kind: "unavailable" });
+      const status = getDropboxSetupStatus(this.plugin.data.dropbox, this.plugin.dropboxAuth);
+      this.render(date, context, { kind: "unavailable", status });
       return;
     }
 
@@ -149,18 +160,15 @@ class DailyInboxView extends ItemView {
       return;
     }
     this.contentEl.createEl("p", { text: `Daily Inbox: ${date}` });
-    this.renderDropboxSection(context, dropbox);
+    if (dropbox) this.renderDropboxSection(context, dropbox);
   }
 
-  private renderDropboxSection(context: DailyContext, state: DropboxSectionState | undefined): void {
+  private renderDropboxSection(context: DailyContext, state: DropboxSectionState): void {
     const section = this.contentEl.createDiv({ cls: "daily-inbox-source" });
     section.createEl("h3", { text: "Dropbox" });
 
-    if (!state || state.kind === "unavailable") {
-      section.createEl("p", {
-        text: "Dropbox is not configured. Connect it in the plugin settings.",
-        cls: "daily-inbox-empty",
-      });
+    if (state.kind === "unavailable") {
+      section.createEl("p", { text: describeDropboxUnavailable(state.status), cls: "daily-inbox-empty" });
       return;
     }
     if (state.kind === "loading") {
@@ -300,6 +308,11 @@ export default class DailyInboxPlugin extends Plugin {
       id: "open-daily-inbox",
       name: "Open Daily Inbox",
       callback: () => this.activateView(),
+    });
+    this.addCommand({
+      id: "refresh-daily-inbox",
+      name: "Refresh Daily Inbox",
+      callback: () => this.refreshAllViews(),
     });
     this.addSettingTab(new DailyInboxSettingTab(this.app, this));
   }

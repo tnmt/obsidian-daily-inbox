@@ -160,6 +160,9 @@ new attempt. It is never persisted to `data.json`.
 - `dropbox-source.ts` — `ContextSource` implementation: pagination, date
   filtering, 401-retry-once, thumbnail chunking; also exposes
   `downloadOriginal()` for a future copy Action
+- `setup-status.ts` — derives which setup step is missing (App Key,
+  connection, pending code, folder) for the settings tab and the view's
+  "not configured" message
 - `settings.ts` / `settings-tab.ts` — `DropboxSettings` and the plugin
   settings-tab UI (App Key, folder path, Connect/paste-code/Disconnect)
 
