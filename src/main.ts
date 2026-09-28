@@ -21,10 +21,12 @@ import {
 } from "./actions/copy-image-to-clipboard";
 import { CopyMarkdownLinkAction, getBrowserTextClipboard } from "./actions/copy-markdown-link";
 import { OpenNoteAction } from "./actions/open-note";
+import { SingleOriginalImageCache } from "./actions/original-image-cache";
 import type { NoteOpener } from "./actions/open-note";
 import { DailyInboxRefresher, partitionItems } from "./daily-inbox-refresh";
 import type { SectionState, SourceSection } from "./daily-inbox-refresh";
 import { FileNameDateResolver } from "./domain";
+import { ImagePreviewModal } from "./image-preview-modal";
 import type { ContextAction, ContextItem, DailyContext, LocalDate } from "./domain";
 import { DropboxAuthManager } from "./sources/dropbox/auth";
 import type { DropboxAuthPersistence, DropboxTokens } from "./sources/dropbox/auth";
@@ -142,6 +144,7 @@ class DailyInboxView extends ItemView {
   private readonly sectionEls = new Map<SourceSection, HTMLElement>();
   private context: DailyContext | undefined;
   private copyController?: AbortController;
+  private previewModal?: ImagePreviewModal;
   // active-leaf-change fires on plain focus changes too (switching panes,
   // focusing this view itself), not just when the resolved date changes.
   // Skip re-querying sources when neither the active file nor the date
@@ -166,6 +169,7 @@ class DailyInboxView extends ItemView {
   async onClose(): Promise<void> {
     this.refresher?.cancel();
     this.copyController?.abort();
+    this.previewModal?.close();
   }
 
   /** Forces a re-query even if the active file/date key hasn't changed — used for manual refresh and when source settings or auth state change. */
@@ -262,12 +266,12 @@ class DailyInboxView extends ItemView {
         cell.addClass("is-copyable");
         cell.setAttr("role", "button");
         cell.setAttr("tabindex", "0");
-        cell.setAttr("aria-label", `Copy ${label} to the clipboard`);
-        cell.addEventListener("click", () => this.copyImage(item, context));
+        cell.setAttr("aria-label", `Preview ${label}`);
+        cell.addEventListener("click", () => this.openPreview(item, context));
         cell.addEventListener("keydown", (evt) => {
           if (evt.key !== "Enter" && evt.key !== " ") return;
           evt.preventDefault();
-          this.copyImage(item, context);
+          this.openPreview(item, context);
         });
       }
       if (item.thumbnail) {
@@ -333,6 +337,15 @@ class DailyInboxView extends ItemView {
       };
     }
     return undefined;
+  }
+
+  private openPreview(item: ContextItem, context: DailyContext): void {
+    this.previewModal?.close();
+    const modal = new ImagePreviewModal(this.app, item, this.plugin.originalImageCache, () =>
+      this.copyImage(item, context),
+    );
+    this.previewModal = modal;
+    modal.open();
   }
 
   private copyImage(item: ContextItem, context: DailyContext): void {
@@ -449,6 +462,7 @@ export default class DailyInboxPlugin extends Plugin {
   };
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
+  originalImageCache!: SingleOriginalImageCache;
   copyImageAction!: CopyImageToClipboardAction;
   copyMarkdownLinkAction!: CopyMarkdownLinkAction;
   openNoteAction!: OpenNoteAction;
@@ -477,12 +491,15 @@ export default class DailyInboxPlugin extends Plugin {
     this.rebuildSourceSections();
 
     const dropboxSource = this.dropboxSource;
+    // Shared by the preview and the copy action so that copying from the
+    // preview reuses the original it already downloaded.
+    this.originalImageCache = new SingleOriginalImageCache({
+      canFetch: (item) => item.sourceId === dropboxSource.id,
+      fetchOriginal: (item, signal) =>
+        dropboxSource.downloadOriginal(item.payload as DropboxImagePayload, signal),
+    });
     this.copyImageAction = new CopyImageToClipboardAction(
-      {
-        canFetch: (item) => item.sourceId === dropboxSource.id,
-        fetchOriginal: (item, signal) =>
-          dropboxSource.downloadOriginal(item.payload as DropboxImagePayload, signal),
-      },
+      this.originalImageCache,
       getBrowserImageClipboard,
       encodePngWithCanvas,
     );
