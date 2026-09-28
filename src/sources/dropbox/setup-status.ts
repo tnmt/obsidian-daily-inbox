@@ -21,7 +21,7 @@ export function getDropboxSetupStatus(
     if (settings.clientId.trim().length === 0) return "missing-app-key";
     return "not-connected";
   }
-  if (settings.folderPath.trim().length === 0) return "missing-folder";
+  if (!settings.folderPaths.some((path) => path.trim().length > 0)) return "missing-folder";
   return "ready";
 }
 

@@ -58,9 +58,13 @@ const DOWNLOAD = "https://content.dropboxapi.com/2/files/download";
 describe("DropboxSource.isAvailable", () => {
   it("requires both a connected account and a configured folder", () => {
     const http = vi.fn();
-    expect(new DropboxSource(http, mockAuth({ isConnected: () => false }), () => "/x").isAvailable()).toBe(false);
-    expect(new DropboxSource(http, mockAuth(), () => "").isAvailable()).toBe(false);
-    expect(new DropboxSource(http, mockAuth(), () => "/x").isAvailable()).toBe(true);
+    expect(new DropboxSource(http, mockAuth({ isConnected: () => false }), () => ["/x"]).isAvailable()).toBe(
+      false,
+    );
+    expect(new DropboxSource(http, mockAuth(), () => []).isAvailable()).toBe(false);
+    expect(new DropboxSource(http, mockAuth(), () => [""]).isAvailable()).toBe(false);
+    expect(new DropboxSource(http, mockAuth(), () => ["/x"]).isAvailable()).toBe(true);
+    expect(new DropboxSource(http, mockAuth(), () => ["", "/x"]).isAvailable()).toBe(true);
   });
 });
 
@@ -76,7 +80,7 @@ describe("DropboxSource.getItems", () => {
         return ok({ entries: [{ ".tag": "success", metadata: matching, thumbnail: "YmFzZTY0" }] });
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
 
     expect(items).toHaveLength(1);
@@ -98,7 +102,7 @@ describe("DropboxSource.getItems", () => {
       },
       [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(items.map((i) => i.id).sort()).toEqual(["id:1", "id:2"]);
   });
@@ -112,7 +116,7 @@ describe("DropboxSource.getItems", () => {
         throw new Error("should not request thumbnails for ineligible entries");
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(items.every((i) => i.thumbnail === undefined)).toBe(true);
     expect(items).toHaveLength(2);
@@ -129,7 +133,7 @@ describe("DropboxSource.getItems", () => {
         return ok({ entries: [], cursor: "c1", has_more: false });
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(listFolderCalls).toBe(2);
   });
@@ -144,7 +148,7 @@ describe("DropboxSource.getItems", () => {
         text: "",
       }),
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const error = await source
       .getItems(context("2026-09-23"), new AbortController().signal)
       .catch((e: unknown) => e);
@@ -177,7 +181,7 @@ describe("DropboxSource.getItems", () => {
       },
       [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(listFolderCalls).toBe(1);
     expect(continueCalls).toBe(2);
@@ -214,7 +218,7 @@ describe("DropboxSource.getItems", () => {
         });
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(firstBatchCalls).toBe(2);
     expect(secondBatchCalls).toBe(1);
@@ -225,7 +229,7 @@ describe("DropboxSource.getItems", () => {
     const http = routeHttp({
       [LIST_FOLDER]: () => ok({ entries: [pdf], cursor: "c1", has_more: false }),
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(items).toHaveLength(0);
   });
@@ -253,7 +257,7 @@ describe("DropboxSource.getItems", () => {
         return ok({ entries: [{ ".tag": "success", metadata: matching, thumbnail: "YmFzZTY0" }] });
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     await source.getItems(context("2026-09-23"), new AbortController().signal);
     expect(listFolderCalls).toBe(1);
     expect(thumbnailCalls).toBe(2);
@@ -269,7 +273,7 @@ describe("DropboxSource.getItems", () => {
         return ok({ entries: [{ ".tag": "success", metadata: matching, thumbnail: "YmFzZTY0" }] });
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     await expect(source.getItems(context("2026-09-23"), controller.signal)).rejects.toThrow(CancelledError);
   });
 
@@ -283,7 +287,7 @@ describe("DropboxSource.getItems", () => {
         text: "",
       }),
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Missing");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Missing"]);
     const error = await source
       .getItems(context("2026-09-23"), new AbortController().signal)
       .catch((e: unknown) => e);
@@ -295,8 +299,99 @@ describe("DropboxSource.getItems", () => {
     const http = vi.fn();
     const controller = new AbortController();
     controller.abort();
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     await expect(source.getItems(context("2026-09-23"), controller.signal)).rejects.toThrow(CancelledError);
+  });
+
+  it("searches every configured folder and merges their matches", async () => {
+    const fromPrimary = fileEntry({ id: "id:primary", path_lower: "/camera uploads/a.jpg" });
+    const fromArchive = fileEntry({ id: "id:archive", path_lower: "/archive/b.jpg" });
+    const http = routeHttp({
+      [LIST_FOLDER]: (params) => {
+        const { path } = JSON.parse(params.body as string) as { path: string };
+        if (path === "/Camera Uploads") return ok({ entries: [fromPrimary], cursor: "c1", has_more: false });
+        if (path === "/Archive") return ok({ entries: [fromArchive], cursor: "c2", has_more: false });
+        throw new Error(`unexpected path ${path}`);
+      },
+      [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads", "/Archive"]);
+    const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(items.map((i) => i.id).sort()).toEqual(["id:archive", "id:primary"]);
+  });
+
+  it("expands a {year} placeholder using the context date's local year", async () => {
+    const http = routeHttp({
+      [LIST_FOLDER]: (params) => {
+        const { path } = JSON.parse(params.body as string) as { path: string };
+        expect(path).toBe("/Pictures/Archive/2025");
+        return ok({ entries: [], cursor: "c1", has_more: false });
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => ["/Pictures/Archive/{year}"]);
+    await source.getItems(context("2025-03-10"), new AbortController().signal);
+  });
+
+  it("tolerates a not-found folder when another configured folder succeeds", async () => {
+    const matching = fileEntry();
+    const http = routeHttp({
+      [LIST_FOLDER]: (params) => {
+        const { path } = JSON.parse(params.body as string) as { path: string };
+        if (path === "/Pictures/Archive/2026") {
+          return {
+            status: 409,
+            headers: {},
+            arrayBuffer: new ArrayBuffer(0),
+            json: { error_summary: "path/not_found/.." },
+            text: "",
+          };
+        }
+        return ok({ entries: [matching], cursor: "c1", has_more: false });
+      },
+      [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => [
+      "/Camera Uploads",
+      "/Pictures/Archive/{year}",
+    ]);
+    const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(items.map((i) => i.id)).toEqual(["id:1"]);
+  });
+
+  it("surfaces not-found when every configured folder comes back not-found", async () => {
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ({
+        status: 409,
+        headers: {},
+        arrayBuffer: new ArrayBuffer(0),
+        json: { error_summary: "path/not_found/.." },
+        text: "",
+      }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => ["/Missing", "/Also/Missing"]);
+    const error = await source
+      .getItems(context("2026-09-23"), new AbortController().signal)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DropboxSourceError);
+    expect((error as DropboxSourceError).kind).toBe("not-found");
+  });
+
+  it("still surfaces a transient error from one folder even if another would have succeeded", async () => {
+    const http = routeHttp({
+      [LIST_FOLDER]: (params) => {
+        const { path } = JSON.parse(params.body as string) as { path: string };
+        if (path === "/Broken") {
+          return { status: 500, headers: {}, arrayBuffer: new ArrayBuffer(0), json: {}, text: "" };
+        }
+        return ok({ entries: [], cursor: "c1", has_more: false });
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => ["/Broken", "/Camera Uploads"]);
+    const error = await source
+      .getItems(context("2026-09-23"), new AbortController().signal)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DropboxSourceError);
+    expect((error as DropboxSourceError).kind).toBe("transient");
   });
 });
 
@@ -311,7 +406,7 @@ describe("DropboxSource.downloadOriginal", () => {
         return { status: 200, headers: {}, arrayBuffer: bytes, json: undefined, text: "" };
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const payload: DropboxImagePayload = { path: "/camera uploads/2026-09-23 12.34.56.jpg" };
     const data = await source.downloadOriginal(payload, new AbortController().signal);
     expect(data).toBe(bytes);
@@ -326,7 +421,7 @@ describe("DropboxSource.downloadOriginal", () => {
         return { status: 200, headers: {}, arrayBuffer: bytes, json: undefined, text: "" };
       },
     });
-    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const source = new DropboxSource(http, mockAuth(), () => ["/Camera Uploads"]);
     const payload: DropboxImagePayload = { path: "/camera uploads/2026-09-23 12.34.56.jpg" };
     await expect(source.downloadOriginal(payload, controller.signal)).rejects.toThrow(CancelledError);
   });

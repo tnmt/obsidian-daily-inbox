@@ -20,7 +20,7 @@ import { CancelledError } from "./sources/dropbox/cancel";
 import { DropboxSource } from "./sources/dropbox/dropbox-source";
 import type { DropboxImagePayload } from "./sources/dropbox/dropbox-source";
 import { DropboxSourceError } from "./sources/dropbox/errors";
-import { DEFAULT_DROPBOX_SETTINGS } from "./sources/dropbox/settings";
+import { DEFAULT_DROPBOX_SETTINGS, migrateDropboxSettings } from "./sources/dropbox/settings";
 import type { DropboxSettings } from "./sources/dropbox/settings";
 import { renderDropboxSettings } from "./sources/dropbox/settings-tab";
 import type { DropboxSettingsHost } from "./sources/dropbox/settings-tab";
@@ -388,7 +388,7 @@ export default class DailyInboxPlugin extends Plugin {
   async onload(): Promise<void> {
     const loaded = (await this.loadData()) as Partial<DailyInboxPluginData> | null;
     this.data = {
-      dropbox: { ...DEFAULT_DROPBOX_SETTINGS, ...loaded?.dropbox },
+      dropbox: { ...DEFAULT_DROPBOX_SETTINGS, ...migrateDropboxSettings(loaded?.dropbox) },
       dropboxTokens: loaded?.dropboxTokens,
       browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
     };
@@ -401,7 +401,7 @@ export default class DailyInboxPlugin extends Plugin {
       },
     };
     this.dropboxAuth = new DropboxAuthManager(requestUrl, () => this.data.dropbox.clientId, persistence);
-    this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPath);
+    this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPaths);
     this.historyDbRuntime = createNodeHistoryDbRuntime();
     this.rebuildSourceSections();
 
