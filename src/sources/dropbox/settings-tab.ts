@@ -2,6 +2,7 @@ import { Notice, Setting } from "obsidian";
 import type { ButtonComponent } from "obsidian";
 import type { DropboxAuthManager } from "./auth";
 import type { DropboxSettings } from "./settings";
+import { describeDropboxSetupStatus, getDropboxSetupStatus } from "./setup-status";
 
 export interface DropboxSettingsHost {
   readonly settings: DropboxSettings;
@@ -30,10 +31,11 @@ export function renderDropboxSettings(
       "— that only stops new commits, it does not protect against vault sync or backups.",
   });
 
-  // Kept in sync with the App Key field below so the Connect button's
-  // disabled state updates as the user types, without re-rendering the
-  // whole tab (which would drop focus out of the field mid-edit).
-  let connectButton: ButtonComponent | undefined;
+  // Kept in sync with the App Key field below so the connection status and
+  // the Connect button's disabled state update as the user types, without
+  // re-rendering the whole tab (which would drop focus out of the field
+  // mid-edit).
+  let syncWithAppKey: (() => void) | undefined;
 
   new Setting(containerEl)
     .setName("Dropbox App Key")
@@ -61,7 +63,7 @@ export function renderDropboxSettings(
             rerender();
             return;
           }
-          connectButton?.setDisabled(trimmed.length === 0);
+          syncWithAppKey?.();
         }),
     );
 
@@ -73,6 +75,7 @@ export function renderDropboxSettings(
         "outside this folder as a result of that scope grant.",
     )
     .addText((text) => {
+      let committedFolderPath = host.settings.folderPath;
       text
         .setPlaceholder("/Camera Uploads")
         .setValue(host.settings.folderPath)
@@ -82,19 +85,23 @@ export function renderDropboxSettings(
         });
       // Re-query on blur rather than on every keystroke — the folder isn't
       // "committed" until the user is done editing it.
-      text.inputEl.addEventListener("blur", () => rerender());
+      text.inputEl.addEventListener("blur", () => {
+        if (host.settings.folderPath === committedFolderPath) return;
+        committedFolderPath = host.settings.folderPath;
+        rerender();
+      });
     });
 
-  connectButton = renderConnectionSetting(containerEl, host, rerender);
+  syncWithAppKey = renderConnectionSetting(containerEl, host, rerender);
 }
 
 function renderConnectionSetting(
   containerEl: HTMLElement,
   host: DropboxSettingsHost,
   rerender: () => void,
-): ButtonComponent | undefined {
-  const status = host.auth.isConnected() ? "Connected" : "Not connected";
-  const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(status);
+): (() => void) | undefined {
+  const describeStatus = () => describeDropboxSetupStatus(getDropboxSetupStatus(host.settings, host.auth));
+  const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(describeStatus());
 
   if (host.auth.isConnected()) {
     connectionSetting.addButton((button) =>
@@ -107,12 +114,13 @@ function renderConnectionSetting(
   }
 
   if (!host.auth.hasPendingAuthorization()) {
+    const hasAppKey = () => host.settings.clientId.trim().length > 0;
     let button: ButtonComponent | undefined;
     connectionSetting.addButton((b) => {
       button = b
         .setButtonText("Connect to Dropbox")
         .setCta()
-        .setDisabled(host.settings.clientId.trim().length === 0)
+        .setDisabled(!hasAppKey())
         .onClick(async () => {
           try {
             const url = await host.auth.beginAuthorization();
@@ -124,7 +132,10 @@ function renderConnectionSetting(
           }
         });
     });
-    return button;
+    return () => {
+      connectionSetting.setDesc(describeStatus());
+      button?.setDisabled(!hasAppKey());
+    };
   }
 
   containerEl.createEl("p", {
