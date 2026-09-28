@@ -47,7 +47,11 @@ interface ContextItem {
 interface ContextAction {
   id: string;
   canHandle(item: ContextItem): boolean;
-  run(item: ContextItem, context: DailyContext): Promise<void>;
+  run(
+    item: ContextItem,
+    context: DailyContext,
+    signal: AbortSignal
+  ): Promise<void>;
 }
 ```
 
@@ -148,6 +152,8 @@ ContextItem (Dropbox image)
 ```
 
 Do not synthesize paste events or depend on another plugin's private implementation.
+
+The async Clipboard API only accepts `image/png` for image writes, so non-PNG originals (camera JPEGs) are decoded and re-encoded as PNG before copying. The pasted file is therefore a PNG that is typically several times larger than the original JPEG, and that PNG is what S3 Image Uploader uploads. Formats the platform cannot decode (e.g. HEIC on desktop Chromium) fail with an explicit error. If upload size becomes a problem in real use, revisit this (e.g. downscaling, or the direct-publish path below) rather than working around the clipboard.
 
 A later direct-publish path should be modeled behind an interface such as:
 
