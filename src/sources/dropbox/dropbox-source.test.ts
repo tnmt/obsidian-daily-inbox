@@ -3,6 +3,7 @@ import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
 import { localDate } from "../../domain";
 import type { DailyContext } from "../../domain";
 import type { DropboxAuthClient } from "./auth";
+import { THUMBNAIL_BATCH_LIMIT } from "./client";
 import type { DropboxFileEntry } from "./client";
 import { DropboxSourceError } from "./errors";
 import { CancelledError } from "./cancel";
@@ -149,6 +150,74 @@ describe("DropboxSource.getItems", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DropboxSourceError);
     expect((error as DropboxSourceError).kind).toBe("auth-required");
+  });
+
+  it("retries only the page that 401'd, not earlier pages already fetched", async () => {
+    const page1Entry = fileEntry({ id: "id:1", name: "2026-09-23 01.00.00.jpg" });
+    const page2Entry = fileEntry({ id: "id:2", name: "2026-09-23 02.00.00.jpg" });
+    let listFolderCalls = 0;
+    let continueCalls = 0;
+    const http = routeHttp({
+      [LIST_FOLDER]: () => {
+        listFolderCalls++;
+        return ok({ entries: [page1Entry], cursor: "cursor-1", has_more: true });
+      },
+      [LIST_FOLDER_CONTINUE]: (params) => {
+        continueCalls++;
+        if (params.headers?.Authorization === "Bearer token") {
+          return {
+            status: 401,
+            headers: {},
+            arrayBuffer: new ArrayBuffer(0),
+            json: { error_summary: "expired_access_token/" },
+            text: "",
+          };
+        }
+        return ok({ entries: [page2Entry], cursor: "cursor-2", has_more: false });
+      },
+      [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(listFolderCalls).toBe(1);
+    expect(continueCalls).toBe(2);
+    expect(items.map((i) => i.id).sort()).toEqual(["id:1", "id:2"]);
+  });
+
+  it("retries only the thumbnail batch that 401'd, not other batches", async () => {
+    const entries = Array.from({ length: THUMBNAIL_BATCH_LIMIT + 1 }, (_, i) =>
+      fileEntry({ id: `id:${i}`, name: `2026-09-23 ${String(i).padStart(2, "0")}.00.00.jpg`, path_lower: `/p${i}.jpg` }),
+    );
+    let firstBatchCalls = 0;
+    let secondBatchCalls = 0;
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ok({ entries, cursor: "c1", has_more: false }),
+      [GET_THUMBNAIL_BATCH]: (params) => {
+        const body = JSON.parse(params.body as string) as { entries: Array<{ path: string }> };
+        const isFirstBatch = body.entries[0]?.path === "/p0.jpg";
+        if (isFirstBatch) {
+          firstBatchCalls++;
+          if (params.headers?.Authorization === "Bearer token") {
+            return {
+              status: 401,
+              headers: {},
+              arrayBuffer: new ArrayBuffer(0),
+              json: { error_summary: "expired_access_token/" },
+              text: "",
+            };
+          }
+        } else {
+          secondBatchCalls++;
+        }
+        return ok({
+          entries: body.entries.map(() => ({ ".tag": "success", metadata: entries[0], thumbnail: "YmFzZTY0" })),
+        });
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(firstBatchCalls).toBe(2);
+    expect(secondBatchCalls).toBe(1);
   });
 
   it("excludes non-image files even when the date matches", async () => {

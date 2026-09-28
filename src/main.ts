@@ -70,6 +70,12 @@ class DailyInboxView extends ItemView {
 
   async onClose(): Promise<void> { this.refreshController?.abort(); }
 
+  /** Forces a re-query even if the active file/date key hasn't changed — used when Dropbox settings or auth state change. */
+  async forceRefresh(): Promise<void> {
+    this.lastRefreshKey = undefined;
+    await this.refresh();
+  }
+
   async refresh(): Promise<void> {
     const activeFile = this.app.workspace.getActiveFile();
     const date = this.dateResolver.resolve(activeFile);
@@ -179,7 +185,10 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
 
   display(): void {
     this.containerEl.empty();
-    renderDropboxSettings(this.containerEl, this, () => this.display());
+    renderDropboxSettings(this.containerEl, this, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
   }
 }
 
@@ -207,10 +216,7 @@ export default class DailyInboxPlugin extends Plugin {
 
     this.registerView(DAILY_INBOX_VIEW_TYPE, (leaf) => new DailyInboxView(leaf, this));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
-      for (const leaf of this.app.workspace.getLeavesOfType(DAILY_INBOX_VIEW_TYPE)) {
-        const view = leaf.view;
-        if (view instanceof DailyInboxView) void view.refresh();
-      }
+      this.forEachView((view) => void view.refresh());
     }));
     this.addCommand({
       id: "open-daily-inbox",
@@ -226,6 +232,18 @@ export default class DailyInboxPlugin extends Plugin {
 
   async savePluginData(): Promise<void> {
     await this.saveData(this.data);
+  }
+
+  /** Forces every open Daily Inbox view to re-query its sources, e.g. after Dropbox settings or auth state change. */
+  refreshAllViews(): void {
+    this.forEachView((view) => void view.forceRefresh());
+  }
+
+  private forEachView(fn: (view: DailyInboxView) => void): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(DAILY_INBOX_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof DailyInboxView) fn(view);
+    }
   }
 
   private async activateView(): Promise<void> {

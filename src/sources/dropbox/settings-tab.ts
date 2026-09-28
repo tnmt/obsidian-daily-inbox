@@ -43,9 +43,25 @@ export function renderDropboxSettings(
         .setPlaceholder("App key")
         .setValue(host.settings.clientId)
         .onChange(async (value) => {
-          host.settings.clientId = value.trim();
+          const trimmed = value.trim();
+          const changed = trimmed !== host.settings.clientId;
+          host.settings.clientId = trimmed;
           await host.saveSettings();
-          connectButton?.setDisabled(host.settings.clientId.length === 0);
+          // A stored refresh token / in-progress code exchange is tied to
+          // the App Key it was obtained with; switching keys invalidates
+          // both, so drop them rather than let a mismatched request fail
+          // confusingly later.
+          if (changed && host.auth.isConnected()) {
+            await host.auth.disconnect();
+            rerender();
+            return;
+          }
+          if (changed && host.auth.hasPendingAuthorization()) {
+            host.auth.cancelAuthorization();
+            rerender();
+            return;
+          }
+          connectButton?.setDisabled(trimmed.length === 0);
         }),
     );
 
@@ -56,15 +72,18 @@ export function renderDropboxSettings(
         "app because Camera Uploads lives outside any app-scoped folder — the token can read " +
         "outside this folder as a result of that scope grant.",
     )
-    .addText((text) =>
+    .addText((text) => {
       text
         .setPlaceholder("/Camera Uploads")
         .setValue(host.settings.folderPath)
         .onChange(async (value) => {
           host.settings.folderPath = value.trim();
           await host.saveSettings();
-        }),
-    );
+        });
+      // Re-query on blur rather than on every keystroke — the folder isn't
+      // "committed" until the user is done editing it.
+      text.inputEl.addEventListener("blur", () => rerender());
+    });
 
   connectButton = renderConnectionSetting(containerEl, host, rerender);
 }

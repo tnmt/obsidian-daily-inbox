@@ -170,7 +170,13 @@ export class DropboxAuthManager implements DropboxAuthClient {
         err,
       );
     } finally {
-      this.pendingCodeVerifier = undefined;
+      // Only clear the verifier this call started with. If a cancel and a
+      // new beginAuthorization() happened while this request was in flight,
+      // pendingCodeVerifier already belongs to that newer attempt — don't
+      // wipe it out from under it.
+      if (generation === this.generation) {
+        this.pendingCodeVerifier = undefined;
+      }
     }
   }
 
@@ -247,6 +253,11 @@ export class DropboxAuthManager implements DropboxAuthClient {
       return this.tokens;
     } catch (err) {
       if (err instanceof CancelledError) throw err;
+      // Also applies when the request itself failed (not just when it
+      // succeeded stale): a disconnect/reconnect that happened while this
+      // was in flight means its failure doesn't apply to the current
+      // connection either, so don't let it clear a newer one's tokens.
+      if (generation !== this.generation) throw new CancelledError();
       if (err instanceof DropboxTokenError && err.isInvalidGrant) {
         this.tokens = undefined;
         await this.persistence.save(undefined);

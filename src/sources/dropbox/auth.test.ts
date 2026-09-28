@@ -168,6 +168,70 @@ describe("DropboxAuthManager", () => {
     expect(persistence.load()).toBeUndefined();
   });
 
+  it("does not clear a newer connection's tokens when a stale refresh fails with invalid_grant", async () => {
+    let resolveStaleRefresh!: (value: RequestUrlResponse) => void;
+    let callCount = 0;
+    const http = vi.fn((): Promise<RequestUrlResponse> => {
+      callCount++;
+      if (callCount === 1) {
+        return new Promise((resolve) => {
+          resolveStaleRefresh = resolve;
+        });
+      }
+      return Promise.resolve(
+        jsonResponse(200, { access_token: "at-new", refresh_token: "rt-new", expires_in: 14400 }),
+      );
+    });
+    const persistence = memoryPersistence({
+      accessToken: "at-old",
+      refreshToken: "rt-old",
+      expiresAtMs: Date.now() + 1000,
+    });
+    const manager = new DropboxAuthManager(http, () => "client", persistence);
+
+    const getPromise = manager.getAccessToken(signal); // starts the stale refresh (call #1, pending)
+    await manager.disconnect();
+    await manager.beginAuthorization();
+    await manager.completeAuthorization("new-code"); // call #2, connects a different account
+    expect(persistence.load()?.accessToken).toBe("at-new");
+
+    resolveStaleRefresh(jsonResponse(400, { error: "invalid_grant" }));
+    await expect(getPromise).rejects.toThrow(CancelledError);
+
+    expect(persistence.load()?.accessToken).toBe("at-new");
+  });
+
+  it("does not clear a newer authorization attempt's verifier when a stale completeAuthorization resolves", async () => {
+    let resolveStale!: (value: RequestUrlResponse) => void;
+    let callCount = 0;
+    const http = vi.fn((): Promise<RequestUrlResponse> => {
+      callCount++;
+      if (callCount === 1) {
+        return new Promise((resolve) => {
+          resolveStale = resolve;
+        });
+      }
+      return Promise.resolve(
+        jsonResponse(200, { access_token: "at-b", refresh_token: "rt-b", expires_in: 14400 }),
+      );
+    });
+    const persistence = memoryPersistence();
+    const manager = new DropboxAuthManager(http, () => "client", persistence);
+
+    await manager.beginAuthorization(); // attempt A
+    const stalePromise = manager.completeAuthorization("code-a"); // call #1, pending
+    manager.cancelAuthorization();
+    await manager.beginAuthorization(); // attempt B, new verifier
+    expect(manager.hasPendingAuthorization()).toBe(true);
+
+    resolveStale(jsonResponse(200, { access_token: "at-a", refresh_token: "rt-a", expires_in: 14400 }));
+    await stalePromise;
+
+    expect(manager.hasPendingAuthorization()).toBe(true);
+    await manager.completeAuthorization("code-b"); // call #2
+    expect(persistence.load()?.accessToken).toBe("at-b");
+  });
+
   it("does not resurrect a connection when cancelAuthorization races a completeAuthorization in flight", async () => {
     let resolveHttp!: (value: RequestUrlResponse) => void;
     const http = vi.fn(

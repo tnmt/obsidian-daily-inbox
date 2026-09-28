@@ -69,15 +69,8 @@ export class DropboxSource implements ContextSource {
 
   async getItems(context: DailyContext, signal: AbortSignal): Promise<ContextItem[]> {
     try {
-      // Each phase gets its own withAuthRetry so a 401 partway through
-      // thumbnail fetching only re-does thumbnail fetching, not the
-      // already-completed folder listing (docs/dropbox-oauth-design.md #7).
-      const matched = await withAuthRetry(this.auth, signal, (token) =>
-        this.listMatchingEntries(context, token, signal),
-      );
-      const thumbnails = await withAuthRetry(this.auth, signal, (token) =>
-        this.fetchThumbnails(token, matched, signal),
-      );
+      const matched = await this.listMatchingEntries(context, signal);
+      const thumbnails = await this.fetchThumbnails(matched, signal);
       return matched.map((entry) => this.toContextItem(entry, thumbnails.get(entry.path_lower)));
     } catch (err) {
       toSourceError(err);
@@ -87,14 +80,16 @@ export class DropboxSource implements ContextSource {
   // Filters per page as entries arrive rather than buffering the whole
   // folder listing, while still following every cursor to completion so a
   // day's results are never silently truncated (docs/dropbox-oauth-design.md #7).
+  // Each page's request gets its own withAuthRetry so a 401 on, say, page 10
+  // only redoes page 10, not the whole listing from page 1
+  // (docs/dropbox-oauth-design.md #7).
   private async listMatchingEntries(
     context: DailyContext,
-    accessToken: string,
     signal: AbortSignal,
   ): Promise<DropboxFileEntry[]> {
     const matched: DropboxFileEntry[] = [];
     const path = this.getFolderPath();
-    let page = await listFolder(this.http, accessToken, path, signal);
+    let page = await withAuthRetry(this.auth, signal, (token) => listFolder(this.http, token, path, signal));
     while (true) {
       throwIfAborted(signal);
       for (const entry of page.entries) {
@@ -103,13 +98,15 @@ export class DropboxSource implements ContextSource {
         }
       }
       if (!page.has_more) break;
-      page = await listFolderContinue(this.http, accessToken, page.cursor, signal);
+      const cursor = page.cursor;
+      page = await withAuthRetry(this.auth, signal, (token) =>
+        listFolderContinue(this.http, token, cursor, signal),
+      );
     }
     return matched;
   }
 
   private async fetchThumbnails(
-    accessToken: string,
     entries: readonly DropboxFileEntry[],
     signal: AbortSignal,
   ): Promise<Map<string, string>> {
@@ -120,14 +117,18 @@ export class DropboxSource implements ContextSource {
       chunks.push(eligible.slice(i, i + THUMBNAIL_BATCH_LIMIT));
     }
     // Chunks are independent batch calls with no ordering dependency, so
-    // fetch them concurrently instead of one at a time.
+    // fetch them concurrently instead of one at a time. Each chunk gets its
+    // own withAuthRetry so a 401 on one batch doesn't force redoing batches
+    // that already succeeded or are still in flight.
     const results = await Promise.all(
       chunks.map((chunk) =>
-        getThumbnailBatch(
-          this.http,
-          accessToken,
-          chunk.map((entry) => entry.path_lower),
-          signal,
+        withAuthRetry(this.auth, signal, (token) =>
+          getThumbnailBatch(
+            this.http,
+            token,
+            chunk.map((entry) => entry.path_lower),
+            signal,
+          ),
         ),
       ),
     );
