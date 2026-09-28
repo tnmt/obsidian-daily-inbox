@@ -31,10 +31,11 @@ export function renderDropboxSettings(
       "— that only stops new commits, it does not protect against vault sync or backups.",
   });
 
-  // Kept in sync with the App Key field below so the Connect button's
-  // disabled state updates as the user types, without re-rendering the
-  // whole tab (which would drop focus out of the field mid-edit).
-  let connectButton: ButtonComponent | undefined;
+  // Kept in sync with the App Key field below so the connection status and
+  // the Connect button's disabled state update as the user types, without
+  // re-rendering the whole tab (which would drop focus out of the field
+  // mid-edit).
+  let syncWithAppKey: (() => void) | undefined;
 
   new Setting(containerEl)
     .setName("Dropbox App Key")
@@ -62,7 +63,7 @@ export function renderDropboxSettings(
             rerender();
             return;
           }
-          connectButton?.setDisabled(trimmed.length === 0);
+          syncWithAppKey?.();
         }),
     );
 
@@ -91,16 +92,16 @@ export function renderDropboxSettings(
       });
     });
 
-  connectButton = renderConnectionSetting(containerEl, host, rerender);
+  syncWithAppKey = renderConnectionSetting(containerEl, host, rerender);
 }
 
 function renderConnectionSetting(
   containerEl: HTMLElement,
   host: DropboxSettingsHost,
   rerender: () => void,
-): ButtonComponent | undefined {
-  const status = describeDropboxSetupStatus(getDropboxSetupStatus(host.settings, host.auth));
-  const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(status);
+): (() => void) | undefined {
+  const describeStatus = () => describeDropboxSetupStatus(getDropboxSetupStatus(host.settings, host.auth));
+  const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(describeStatus());
 
   if (host.auth.isConnected()) {
     connectionSetting.addButton((button) =>
@@ -113,12 +114,13 @@ function renderConnectionSetting(
   }
 
   if (!host.auth.hasPendingAuthorization()) {
+    const hasAppKey = () => host.settings.clientId.trim().length > 0;
     let button: ButtonComponent | undefined;
     connectionSetting.addButton((b) => {
       button = b
         .setButtonText("Connect to Dropbox")
         .setCta()
-        .setDisabled(host.settings.clientId.trim().length === 0)
+        .setDisabled(!hasAppKey())
         .onClick(async () => {
           try {
             const url = await host.auth.beginAuthorization();
@@ -130,7 +132,10 @@ function renderConnectionSetting(
           }
         });
     });
-    return button;
+    return () => {
+      connectionSetting.setDesc(describeStatus());
+      button?.setDisabled(!hasAppKey());
+    };
   }
 
   containerEl.createEl("p", {
