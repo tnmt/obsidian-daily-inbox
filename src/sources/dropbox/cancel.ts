@@ -12,21 +12,3 @@ export class CancelledError extends Error {
 export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new CancelledError();
 }
-
-export function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new CancelledError());
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    function onAbort(): void {
-      clearTimeout(timer);
-      reject(new CancelledError());
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}

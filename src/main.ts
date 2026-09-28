@@ -47,6 +47,11 @@ class DailyInboxView extends ItemView {
   private readonly dateResolver = new FileNameDateResolver();
   private refreshController?: AbortController;
   private refreshSequence = 0;
+  // active-leaf-change fires on plain focus changes too (switching panes,
+  // focusing this view itself), not just when the resolved date changes.
+  // Skip re-querying Dropbox when neither the active file nor the date
+  // actually moved.
+  private lastRefreshKey: string | undefined;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -58,17 +63,24 @@ class DailyInboxView extends ItemView {
   getViewType(): string { return DAILY_INBOX_VIEW_TYPE; }
   getDisplayText(): string { return "Daily Inbox"; }
 
-  async onOpen(): Promise<void> { await this.refresh(); }
+  async onOpen(): Promise<void> {
+    this.lastRefreshKey = undefined;
+    await this.refresh();
+  }
 
   async onClose(): Promise<void> { this.refreshController?.abort(); }
 
   async refresh(): Promise<void> {
+    const activeFile = this.app.workspace.getActiveFile();
+    const date = this.dateResolver.resolve(activeFile);
+    const key = `${activeFile?.path ?? ""}\0${date ?? ""}`;
+    if (key === this.lastRefreshKey) return;
+    this.lastRefreshKey = key;
+
     const sequence = ++this.refreshSequence;
     this.refreshController?.abort();
     const controller = new AbortController();
     this.refreshController = controller;
-    const activeFile = this.app.workspace.getActiveFile();
-    const date = this.dateResolver.resolve(activeFile);
     const context: DailyContext | undefined = date && activeFile ? { date, activeFile } : undefined;
 
     if (!context) {

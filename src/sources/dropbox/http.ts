@@ -1,4 +1,5 @@
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
+import { throwIfAborted } from "./cancel";
 
 // Obsidian's requestUrl (rather than the browser fetch) sidesteps CORS
 // differences between desktop and mobile, at the cost of not accepting an
@@ -39,7 +40,9 @@ export async function rpcCall<T>(
   route: string,
   accessToken: string,
   args: unknown,
+  signal: AbortSignal,
 ): Promise<T> {
+  throwIfAborted(signal);
   const response = await http({
     url: `https://${host}.dropboxapi.com/2/${route}`,
     method: "POST",
@@ -68,7 +71,9 @@ export async function contentDownloadCall(
   route: string,
   accessToken: string,
   args: unknown,
+  signal: AbortSignal,
 ): Promise<DownloadResult> {
+  throwIfAborted(signal);
   const response = await http({
     url: `https://content.dropboxapi.com/2/${route}`,
     method: "POST",

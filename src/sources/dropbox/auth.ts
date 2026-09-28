@@ -1,7 +1,7 @@
 import { createCodeChallenge, createCodeVerifier } from "./pkce";
 import type { HttpRequester } from "./http";
 import { DropboxSourceError } from "./errors";
-import { throwIfAborted } from "./cancel";
+import { CancelledError, throwIfAborted } from "./cancel";
 
 const AUTHORIZE_URL = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
@@ -94,6 +94,10 @@ export class DropboxAuthManager implements DropboxAuthClient {
   private tokens: DropboxTokens | undefined;
   private pendingCodeVerifier: string | undefined;
   private refreshInFlight: Promise<DropboxTokens> | undefined;
+  // Bumped by disconnect()/cancelAuthorization() so an in-flight
+  // completeAuthorization()/doRefresh() that resolves afterward can tell its
+  // result is stale and must not resurrect or clobber the current state.
+  private generation = 0;
 
   constructor(
     private readonly http: HttpRequester,
@@ -115,6 +119,7 @@ export class DropboxAuthManager implements DropboxAuthClient {
   async beginAuthorization(): Promise<string> {
     const verifier = createCodeVerifier();
     this.pendingCodeVerifier = verifier;
+    this.generation++;
     const challenge = await createCodeChallenge(verifier);
     const params = new URLSearchParams({
       client_id: this.getClientId(),
@@ -129,6 +134,7 @@ export class DropboxAuthManager implements DropboxAuthClient {
   /** Discards an in-progress authorization attempt without completing it. */
   cancelAuthorization(): void {
     this.pendingCodeVerifier = undefined;
+    this.generation++;
   }
 
   /** Exchanges the code the user pasted back for tokens. */
@@ -140,6 +146,7 @@ export class DropboxAuthManager implements DropboxAuthClient {
         "No Dropbox authorization attempt is in progress.",
       );
     }
+    const generation = this.generation;
     try {
       const body = await callTokenEndpoint(
         this.http,
@@ -150,6 +157,10 @@ export class DropboxAuthManager implements DropboxAuthClient {
           code_verifier: verifier,
         }),
       );
+      // A cancel or disconnect that happened while this request was in
+      // flight already put the manager in the state it wants; don't
+      // resurrect a connection on top of it.
+      if (generation !== this.generation) return;
       this.tokens = toTokens(body);
       await this.persistence.save(this.tokens);
     } catch (err) {
@@ -164,18 +175,31 @@ export class DropboxAuthManager implements DropboxAuthClient {
   }
 
   async disconnect(): Promise<void> {
+    this.generation++;
     this.tokens = undefined;
     this.pendingCodeVerifier = undefined;
     await this.persistence.save(undefined);
   }
 
-  /** Returns a usable access token, refreshing first if it's near expiry. */
+  /**
+   * Returns a usable access token, refreshing first if it's near expiry. If
+   * that proactive refresh fails transiently (network/429/5xx) but the
+   * current token hasn't actually expired yet, the old token is used rather
+   * than failing the whole call outright.
+   */
   async getAccessToken(signal: AbortSignal): Promise<string> {
     if (!this.tokens) {
       throw new DropboxSourceError("auth-required", "Dropbox is not connected.");
     }
     if (this.tokens.expiresAtMs - Date.now() < REFRESH_MARGIN_MS) {
-      await this.refresh(signal);
+      try {
+        await this.refresh(signal);
+      } catch (err) {
+        const stillValid = this.tokens !== undefined && this.tokens.expiresAtMs > Date.now();
+        if (!stillValid || !(err instanceof DropboxSourceError) || err.kind !== "transient") {
+          throw err;
+        }
+      }
     }
     return this.requireTokens().accessToken;
   }
@@ -204,6 +228,7 @@ export class DropboxAuthManager implements DropboxAuthClient {
 
   private async doRefresh(signal: AbortSignal): Promise<DropboxTokens> {
     const current = this.requireTokens();
+    const generation = this.generation;
     throwIfAborted(signal);
     try {
       const body = await callTokenEndpoint(
@@ -214,10 +239,14 @@ export class DropboxAuthManager implements DropboxAuthClient {
           client_id: this.getClientId(),
         }),
       );
+      // The account was disconnected (or reconnected) while this refresh was
+      // in flight; its result no longer applies to the current connection.
+      if (generation !== this.generation) throw new CancelledError();
       this.tokens = toTokens(body, current.refreshToken);
       await this.persistence.save(this.tokens);
       return this.tokens;
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       if (err instanceof DropboxTokenError && err.isInvalidGrant) {
         this.tokens = undefined;
         await this.persistence.save(undefined);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
 import { DropboxAuthManager, type DropboxAuthPersistence, type DropboxTokens } from "./auth";
+import { CancelledError } from "./cancel";
 import { DropboxSourceError } from "./errors";
 
 function jsonResponse(status: number, body: unknown): RequestUrlResponse {
@@ -127,6 +128,63 @@ describe("DropboxAuthManager", () => {
     const persistence = memoryPersistence({ accessToken: "at", refreshToken: "rt", expiresAtMs: Date.now() + 1000 });
     const manager = new DropboxAuthManager(vi.fn(), () => "client", persistence);
     await manager.disconnect();
+    expect(manager.isConnected()).toBe(false);
+    expect(persistence.load()).toBeUndefined();
+  });
+
+  it("falls back to the still-valid old token when a near-expiry refresh fails transiently", async () => {
+    const http = vi.fn(async (): Promise<RequestUrlResponse> => jsonResponse(503, { error: "server_error" }));
+    const persistence = memoryPersistence({
+      accessToken: "at-old",
+      refreshToken: "rt",
+      // Inside the 5-minute refresh margin, but not actually expired yet.
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const manager = new DropboxAuthManager(http, () => "client", persistence);
+    await expect(manager.getAccessToken(signal)).resolves.toBe("at-old");
+  });
+
+  it("does not resurrect a disconnected account when an in-flight refresh resolves afterward", async () => {
+    let resolveHttp!: (value: RequestUrlResponse) => void;
+    const http = vi.fn(
+      () =>
+        new Promise<RequestUrlResponse>((resolve) => {
+          resolveHttp = resolve;
+        }),
+    );
+    const persistence = memoryPersistence({
+      accessToken: "at-old",
+      refreshToken: "rt",
+      expiresAtMs: Date.now() + 1000,
+    });
+    const manager = new DropboxAuthManager(http, () => "client", persistence);
+
+    const getPromise = manager.getAccessToken(signal);
+    await manager.disconnect();
+    resolveHttp(jsonResponse(200, { access_token: "at-new", expires_in: 14400 }));
+
+    await expect(getPromise).rejects.toThrow(CancelledError);
+    expect(manager.isConnected()).toBe(false);
+    expect(persistence.load()).toBeUndefined();
+  });
+
+  it("does not resurrect a connection when cancelAuthorization races a completeAuthorization in flight", async () => {
+    let resolveHttp!: (value: RequestUrlResponse) => void;
+    const http = vi.fn(
+      () =>
+        new Promise<RequestUrlResponse>((resolve) => {
+          resolveHttp = resolve;
+        }),
+    );
+    const persistence = memoryPersistence();
+    const manager = new DropboxAuthManager(http, () => "client", persistence);
+    await manager.beginAuthorization();
+
+    const completePromise = manager.completeAuthorization("the-code");
+    manager.cancelAuthorization();
+    resolveHttp(jsonResponse(200, { access_token: "at-1", refresh_token: "rt-1", expires_in: 14400 }));
+    await completePromise;
+
     expect(manager.isConnected()).toBe(false);
     expect(persistence.load()).toBeUndefined();
   });

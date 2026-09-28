@@ -1,4 +1,5 @@
 import { Notice, Setting } from "obsidian";
+import type { ButtonComponent } from "obsidian";
 import type { DropboxAuthManager } from "./auth";
 import type { DropboxSettings } from "./settings";
 
@@ -29,6 +30,11 @@ export function renderDropboxSettings(
       "— that only stops new commits, it does not protect against vault sync or backups.",
   });
 
+  // Kept in sync with the App Key field below so the Connect button's
+  // disabled state updates as the user types, without re-rendering the
+  // whole tab (which would drop focus out of the field mid-edit).
+  let connectButton: ButtonComponent | undefined;
+
   new Setting(containerEl)
     .setName("Dropbox App Key")
     .setDesc("The client_id of the Dropbox app registered for this plugin.")
@@ -39,6 +45,7 @@ export function renderDropboxSettings(
         .onChange(async (value) => {
           host.settings.clientId = value.trim();
           await host.saveSettings();
+          connectButton?.setDisabled(host.settings.clientId.length === 0);
         }),
     );
 
@@ -59,14 +66,14 @@ export function renderDropboxSettings(
         }),
     );
 
-  renderConnectionSetting(containerEl, host, rerender);
+  connectButton = renderConnectionSetting(containerEl, host, rerender);
 }
 
 function renderConnectionSetting(
   containerEl: HTMLElement,
   host: DropboxSettingsHost,
   rerender: () => void,
-): void {
+): ButtonComponent | undefined {
   const status = host.auth.isConnected() ? "Connected" : "Not connected";
   const connectionSetting = new Setting(containerEl).setName("Dropbox connection").setDesc(status);
 
@@ -77,12 +84,13 @@ function renderConnectionSetting(
         rerender();
       }),
     );
-    return;
+    return undefined;
   }
 
   if (!host.auth.hasPendingAuthorization()) {
-    connectionSetting.addButton((button) =>
-      button
+    let button: ButtonComponent | undefined;
+    connectionSetting.addButton((b) => {
+      button = b
         .setButtonText("Connect to Dropbox")
         .setCta()
         .setDisabled(host.settings.clientId.trim().length === 0)
@@ -90,13 +98,14 @@ function renderConnectionSetting(
           try {
             const url = await host.auth.beginAuthorization();
             window.open(url);
-            rerender();
           } catch (err) {
             reportError(err);
+          } finally {
+            rerender();
           }
-        }),
-    );
-    return;
+        });
+    });
+    return button;
   }
 
   containerEl.createEl("p", {
@@ -113,9 +122,10 @@ function renderConnectionSetting(
         .onClick(async () => {
           try {
             await host.auth.completeAuthorization(pastedCode);
-            rerender();
           } catch (err) {
             reportError(err);
+          } finally {
+            rerender();
           }
         }),
     )
@@ -125,4 +135,5 @@ function renderConnectionSetting(
         rerender();
       }),
     );
+  return undefined;
 }

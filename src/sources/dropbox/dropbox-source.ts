@@ -6,6 +6,7 @@ import {
   downloadFile,
   getThumbnailBatch,
   isFileEntry,
+  isImageFile,
   isThumbnailSuccess,
   listFolder,
   listFolderContinue,
@@ -15,6 +16,7 @@ import { CancelledError, throwIfAborted } from "./cancel";
 import { DropboxApiError, type HttpRequester } from "./http";
 import { DropboxSourceError } from "./errors";
 import { resolveEntryDate } from "./date-matching";
+import { withAuthRetry } from "./with-auth-retry";
 
 export interface DropboxImagePayload {
   readonly path: string;
@@ -27,16 +29,22 @@ function isThumbnailEligible(entry: DropboxFileEntry): boolean {
   return !!ext && THUMBNAIL_SUPPORTED_EXTENSIONS.has(ext) && entry.size <= MAX_THUMBNAIL_BYTES;
 }
 
-function isUnauthorized(err: unknown): boolean {
-  return err instanceof DropboxApiError && err.status === 401;
-}
-
-// Maps every failure that can reach getItems() into the source-level error
-// vocabulary from errors.ts, or rethrows cancellation as-is so callers can
-// silently drop the request instead of rendering an error.
+// Maps every failure that can reach getItems()/downloadOriginal() into the
+// source-level error vocabulary from errors.ts, or rethrows
+// DropboxSourceError/CancelledError as-is so callers can drop a cancelled
+// request instead of rendering it as an error.
 function toSourceError(err: unknown): never {
   if (err instanceof DropboxSourceError || err instanceof CancelledError) throw err;
   if (err instanceof DropboxApiError) {
+    if (err.status === 401) {
+      // withAuthRetry already tried a refresh-and-retry once; a 401 that
+      // survives that means re-authentication, not a transient hiccup.
+      throw new DropboxSourceError(
+        "auth-required",
+        `Dropbox re-authentication is required: ${err.message}`,
+        err,
+      );
+    }
     if (err.status === 409 && err.errorSummary?.includes("not_found")) {
       throw new DropboxSourceError("not-found", `Dropbox folder not found: ${err.message}`, err);
     }
@@ -61,36 +69,19 @@ export class DropboxSource implements ContextSource {
 
   async getItems(context: DailyContext, signal: AbortSignal): Promise<ContextItem[]> {
     try {
-      return await this.withAuthRetry(signal, (token) => this.fetchItems(context, token, signal));
+      // Each phase gets its own withAuthRetry so a 401 partway through
+      // thumbnail fetching only re-does thumbnail fetching, not the
+      // already-completed folder listing (docs/dropbox-oauth-design.md #7).
+      const matched = await withAuthRetry(this.auth, signal, (token) =>
+        this.listMatchingEntries(context, token, signal),
+      );
+      const thumbnails = await withAuthRetry(this.auth, signal, (token) =>
+        this.fetchThumbnails(token, matched, signal),
+      );
+      return matched.map((entry) => this.toContextItem(entry, thumbnails.get(entry.path_lower)));
     } catch (err) {
       toSourceError(err);
     }
-  }
-
-  private async withAuthRetry<T>(
-    signal: AbortSignal,
-    fn: (accessToken: string) => Promise<T>,
-  ): Promise<T> {
-    const token = await this.auth.getAccessToken(signal);
-    try {
-      return await fn(token);
-    } catch (err) {
-      if (isUnauthorized(err)) {
-        const refreshed = await this.auth.refreshAfterUnauthorized(signal);
-        return await fn(refreshed);
-      }
-      throw err;
-    }
-  }
-
-  private async fetchItems(
-    context: DailyContext,
-    accessToken: string,
-    signal: AbortSignal,
-  ): Promise<ContextItem[]> {
-    const matched = await this.listMatchingEntries(context, accessToken, signal);
-    const thumbnails = await this.fetchThumbnails(accessToken, matched, signal);
-    return matched.map((entry) => this.toContextItem(entry, thumbnails.get(entry.path_lower)));
   }
 
   // Filters per page as entries arrive rather than buffering the whole
@@ -107,7 +98,9 @@ export class DropboxSource implements ContextSource {
     while (true) {
       throwIfAborted(signal);
       for (const entry of page.entries) {
-        if (isFileEntry(entry) && resolveEntryDate(entry) === context.date) matched.push(entry);
+        if (isFileEntry(entry) && isImageFile(entry) && resolveEntryDate(entry) === context.date) {
+          matched.push(entry);
+        }
       }
       if (!page.has_more) break;
       page = await listFolderContinue(this.http, accessToken, page.cursor, signal);
@@ -122,21 +115,34 @@ export class DropboxSource implements ContextSource {
   ): Promise<Map<string, string>> {
     const thumbnails = new Map<string, string>();
     const eligible = entries.filter(isThumbnailEligible);
+    const chunks: DropboxFileEntry[][] = [];
     for (let i = 0; i < eligible.length; i += THUMBNAIL_BATCH_LIMIT) {
-      throwIfAborted(signal);
-      const chunk = eligible.slice(i, i + THUMBNAIL_BATCH_LIMIT);
-      const result = await getThumbnailBatch(
-        this.http,
-        accessToken,
-        chunk.map((entry) => entry.path_lower),
-        signal,
-      );
+      chunks.push(eligible.slice(i, i + THUMBNAIL_BATCH_LIMIT));
+    }
+    // Chunks are independent batch calls with no ordering dependency, so
+    // fetch them concurrently instead of one at a time.
+    const results = await Promise.all(
+      chunks.map((chunk) =>
+        getThumbnailBatch(
+          this.http,
+          accessToken,
+          chunk.map((entry) => entry.path_lower),
+          signal,
+        ),
+      ),
+    );
+    // The batch calls above don't check the signal again after their last
+    // await resolves, so a cancellation during that final wait needs to be
+    // caught here before the result is used.
+    throwIfAborted(signal);
+    results.forEach((result, chunkIndex) => {
+      const chunk = chunks[chunkIndex];
       result.entries.forEach((resultEntry, index) => {
         if (isThumbnailSuccess(resultEntry)) {
           thumbnails.set(chunk[index].path_lower, `data:image/jpeg;base64,${resultEntry.thumbnail}`);
         }
       });
-    }
+    });
     return thumbnails;
   }
 
@@ -156,9 +162,10 @@ export class DropboxSource implements ContextSource {
   /** Fetches the full image bytes for a payload produced by this source. Called only from an explicit Action, never from getItems(). */
   async downloadOriginal(payload: DropboxImagePayload, signal: AbortSignal): Promise<ArrayBuffer> {
     try {
-      const { data } = await this.withAuthRetry(signal, (token) =>
+      const { data } = await withAuthRetry(this.auth, signal, (token) =>
         downloadFile(this.http, token, payload.path, signal),
       );
+      throwIfAborted(signal);
       return data;
     } catch (err) {
       toSourceError(err);

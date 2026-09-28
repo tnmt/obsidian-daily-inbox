@@ -133,6 +133,77 @@ describe("DropboxSource.getItems", () => {
     expect(listFolderCalls).toBe(2);
   });
 
+  it("surfaces auth-required (not transient) when a 401 survives the refresh-and-retry", async () => {
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ({
+        status: 401,
+        headers: {},
+        arrayBuffer: new ArrayBuffer(0),
+        json: { error_summary: "expired_access_token/" },
+        text: "",
+      }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const error = await source
+      .getItems(context("2026-09-23"), new AbortController().signal)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DropboxSourceError);
+    expect((error as DropboxSourceError).kind).toBe("auth-required");
+  });
+
+  it("excludes non-image files even when the date matches", async () => {
+    const pdf = fileEntry({ id: "id:pdf", name: "2026-09-23 12.34.56.pdf" });
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ok({ entries: [pdf], cursor: "c1", has_more: false }),
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const items = await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(items).toHaveLength(0);
+  });
+
+  it("only retries thumbnail fetching, not the folder listing, on a 401 during thumbnails", async () => {
+    const matching = fileEntry();
+    let listFolderCalls = 0;
+    let thumbnailCalls = 0;
+    const http = routeHttp({
+      [LIST_FOLDER]: () => {
+        listFolderCalls++;
+        return ok({ entries: [matching], cursor: "c1", has_more: false });
+      },
+      [GET_THUMBNAIL_BATCH]: (params) => {
+        thumbnailCalls++;
+        if (params.headers?.Authorization === "Bearer token") {
+          return {
+            status: 401,
+            headers: {},
+            arrayBuffer: new ArrayBuffer(0),
+            json: { error_summary: "expired_access_token/" },
+            text: "",
+          };
+        }
+        return ok({ entries: [{ ".tag": "success", metadata: matching, thumbnail: "YmFzZTY0" }] });
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    await source.getItems(context("2026-09-23"), new AbortController().signal);
+    expect(listFolderCalls).toBe(1);
+    expect(thumbnailCalls).toBe(2);
+  });
+
+  it("drops a thumbnail result that resolves after the signal is aborted", async () => {
+    const matching = fileEntry();
+    const controller = new AbortController();
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ok({ entries: [matching], cursor: "c1", has_more: false }),
+      [GET_THUMBNAIL_BATCH]: () => {
+        controller.abort();
+        return ok({ entries: [{ ".tag": "success", metadata: matching, thumbnail: "YmFzZTY0" }] });
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    await expect(source.getItems(context("2026-09-23"), controller.signal)).rejects.toThrow(CancelledError);
+  });
+
   it("surfaces a not-found source error when the folder is missing", async () => {
     const http = routeHttp({
       [LIST_FOLDER]: () => ({
@@ -175,5 +246,19 @@ describe("DropboxSource.downloadOriginal", () => {
     const payload: DropboxImagePayload = { path: "/camera uploads/2026-09-23 12.34.56.jpg" };
     const data = await source.downloadOriginal(payload, new AbortController().signal);
     expect(data).toBe(bytes);
+  });
+
+  it("drops a download result that resolves after the signal is aborted", async () => {
+    const controller = new AbortController();
+    const bytes = new TextEncoder().encode("bytes").buffer;
+    const http = routeHttp({
+      [DOWNLOAD]: () => {
+        controller.abort();
+        return { status: 200, headers: {}, arrayBuffer: bytes, json: undefined, text: "" };
+      },
+    });
+    const source = new DropboxSource(http, mockAuth(), () => "/Camera Uploads");
+    const payload: DropboxImagePayload = { path: "/camera uploads/2026-09-23 12.34.56.jpg" };
+    await expect(source.downloadOriginal(payload, controller.signal)).rejects.toThrow(CancelledError);
   });
 });
