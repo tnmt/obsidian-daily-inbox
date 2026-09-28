@@ -1,6 +1,16 @@
 import { readFile } from "fs/promises";
 import { homedir } from "os";
-import { ItemView, Notice, Platform, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import {
+  ItemView,
+  Notice,
+  Platform,
+  Plugin,
+  PluginSettingTab,
+  TFile,
+  WorkspaceLeaf,
+  requestUrl,
+  setIcon,
+} from "obsidian";
 import type { App } from "obsidian";
 import { ClipboardUnsupportedError } from "./actions/errors";
 import {
@@ -10,6 +20,8 @@ import {
   getBrowserImageClipboard,
 } from "./actions/copy-image-to-clipboard";
 import { CopyMarkdownLinkAction, getBrowserTextClipboard } from "./actions/copy-markdown-link";
+import { OpenNoteAction } from "./actions/open-note";
+import type { NoteOpener } from "./actions/open-note";
 import { DailyInboxRefresher, partitionItems } from "./daily-inbox-refresh";
 import type { SectionState, SourceSection } from "./daily-inbox-refresh";
 import { FileNameDateResolver } from "./domain";
@@ -38,6 +50,12 @@ import { DEFAULT_BROWSER_HISTORY_SETTINGS, resolveHistoryPath } from "./sources/
 import type { BrowserHistorySettings } from "./sources/browser-history/settings";
 import { renderBrowserHistorySettings } from "./sources/browser-history/settings-tab";
 import type { BrowserHistorySettingsHost } from "./sources/browser-history/settings-tab";
+import { OnThisDaySource } from "./sources/on-this-day/on-this-day-source";
+import { DEFAULT_ON_THIS_DAY_SETTINGS } from "./sources/on-this-day/settings";
+import type { OnThisDaySettings } from "./sources/on-this-day/settings";
+import { renderOnThisDaySettings } from "./sources/on-this-day/settings-tab";
+import type { OnThisDaySettingsHost } from "./sources/on-this-day/settings-tab";
+import type { VaultAccess } from "./sources/on-this-day/vault-access";
 
 export * from "./domain";
 
@@ -47,6 +65,7 @@ interface DailyInboxPluginData {
   dropbox: DropboxSettings;
   dropboxTokens?: DropboxTokens;
   browserHistory: BrowserHistorySettings;
+  onThisDay: OnThisDaySettings;
 }
 
 function describeDropboxError(err: unknown): string {
@@ -80,6 +99,14 @@ function describeCopyImageError(err: unknown): string {
 function describeCopyMarkdownLinkError(err: unknown): string {
   if (err instanceof ClipboardUnsupportedError) return err.message;
   return "Could not copy the link to the clipboard.";
+}
+
+function describeOpenNoteError(): string {
+  return "Could not open that note.";
+}
+
+function describeOnThisDayError(): string {
+  return "Unexpected error while looking up past Daily Notes.";
 }
 
 function describeBrowserHistoryError(err: unknown): string {
@@ -269,21 +296,43 @@ class DailyInboxView extends ItemView {
       }
       const entry = list.createEl("li", { cls: "daily-inbox-item" });
       const label = item.title ?? item.id;
-      if (this.plugin.copyMarkdownLinkAction.canHandle(item)) {
+      const handler = this.resolveItemHandler(item);
+      if (handler) {
         entry.addClass("is-copyable");
         entry.setAttr("role", "button");
         entry.setAttr("tabindex", "0");
-        entry.setAttr("aria-label", `Copy ${label} as a Markdown link`);
-        entry.addEventListener("click", () => this.copyMarkdownLink(item, context));
+        entry.setAttr("aria-label", handler.ariaLabel(label));
+        entry.addEventListener("click", () => handler.run(item, context));
         entry.addEventListener("keydown", (evt) => {
           if (evt.key !== "Enter" && evt.key !== " ") return;
           evt.preventDefault();
-          this.copyMarkdownLink(item, context);
+          handler.run(item, context);
         });
       }
       entry.createDiv({ cls: "daily-inbox-item-title", text: label });
       if (item.subtitle) entry.createDiv({ cls: "daily-inbox-item-subtitle", text: item.subtitle });
     }
+  }
+
+  // Each item type in the list is handled by exactly one action; new
+  // note/link-typed sources get list interactivity for free by matching an
+  // existing action's canHandle(), without this view knowing about sources.
+  private resolveItemHandler(
+    item: ContextItem,
+  ): { ariaLabel: (label: string) => string; run: (item: ContextItem, context: DailyContext) => void } | undefined {
+    if (this.plugin.copyMarkdownLinkAction.canHandle(item)) {
+      return {
+        ariaLabel: (label) => `Copy ${label} as a Markdown link`,
+        run: (item, context) => this.copyMarkdownLink(item, context),
+      };
+    }
+    if (this.plugin.openNoteAction.canHandle(item)) {
+      return {
+        ariaLabel: (label) => `Open ${label}`,
+        run: (item, context) => this.openNote(item, context),
+      };
+    }
+    return undefined;
   }
 
   private copyImage(item: ContextItem, context: DailyContext): void {
@@ -299,6 +348,14 @@ class DailyInboxView extends ItemView {
       progressText: "Copying link…",
       successText: "Link copied. Paste it into your note.",
       describeError: describeCopyMarkdownLinkError,
+    });
+  }
+
+  private openNote(item: ContextItem, context: DailyContext): void {
+    this.runAction(this.plugin.openNoteAction, item, context, {
+      progressText: "Opening note…",
+      successText: "Note opened.",
+      describeError: describeOpenNoteError,
     });
   }
 
@@ -359,6 +416,13 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
     };
   }
 
+  private get onThisDayHost(): OnThisDaySettingsHost {
+    return {
+      settings: this.plugin.data.onThisDay,
+      saveSettings: () => this.plugin.savePluginData(),
+    };
+  }
+
   display(): void {
     this.containerEl.empty();
     renderDropboxSettings(this.containerEl, this, () => {
@@ -370,6 +434,10 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
       this.plugin.refreshAllViews();
       this.display();
     });
+    renderOnThisDaySettings(this.containerEl, this.onThisDayHost, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
   }
 }
 
@@ -377,11 +445,13 @@ export default class DailyInboxPlugin extends Plugin {
   data: DailyInboxPluginData = {
     dropbox: { ...DEFAULT_DROPBOX_SETTINGS },
     browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS },
+    onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS },
   };
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
   copyImageAction!: CopyImageToClipboardAction;
   copyMarkdownLinkAction!: CopyMarkdownLinkAction;
+  openNoteAction!: OpenNoteAction;
   sourceSections!: SourceSection[];
   private historyDbRuntime!: HistoryDbRuntime;
 
@@ -391,6 +461,7 @@ export default class DailyInboxPlugin extends Plugin {
       dropbox: { ...DEFAULT_DROPBOX_SETTINGS, ...loaded?.dropbox },
       dropboxTokens: loaded?.dropboxTokens,
       browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
+      onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS, ...loaded?.onThisDay },
     };
 
     const persistence: DropboxAuthPersistence = {
@@ -416,6 +487,18 @@ export default class DailyInboxPlugin extends Plugin {
       encodePngWithCanvas,
     );
     this.copyMarkdownLinkAction = new CopyMarkdownLinkAction(getBrowserTextClipboard);
+    const noteOpener: NoteOpener = {
+      open: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) throw new Error("Note not found.");
+        // getLeaf(false) would reuse the Daily Inbox sidebar leaf itself
+        // (clicking inside it makes it the active leaf), replacing the panel
+        // instead of opening the note in the main editor area.
+        const leaf = this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ?? this.app.workspace.getLeaf(true);
+        await leaf.openFile(file);
+      },
+    };
+    this.openNoteAction = new OpenNoteAction(noteOpener);
 
     this.registerView(DAILY_INBOX_VIEW_TYPE, (leaf) => new DailyInboxView(leaf, this));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
@@ -442,6 +525,18 @@ export default class DailyInboxPlugin extends Plugin {
     await this.saveData(this.data);
   }
 
+  /** Resolves/reads notes through the real Vault/MetadataCache, kept behind an interface so OnThisDaySource itself needs no Obsidian App to test. */
+  private vaultAccess(): VaultAccess {
+    return {
+      resolveDatedNote: (fileName, sourcePath) => {
+        const dest = this.app.metadataCache.getFirstLinkpathDest(fileName.replace(/\.md$/, ""), sourcePath);
+        if (!dest || dest.extension !== "md") return undefined;
+        return { path: dest.path };
+      },
+      readNote: (note) => this.app.vault.adapter.read(note.path),
+    };
+  }
+
   /** Rebuilds the source/section list from current settings — the number of browser-history sources can change (profiles added/removed), unlike Dropbox's fixed single section. */
   rebuildSourceSections(): void {
     const dropboxSource = this.dropboxSource;
@@ -452,6 +547,20 @@ export default class DailyInboxPlugin extends Plugin {
         describeUnavailable: () =>
           describeDropboxUnavailable(getDropboxSetupStatus(this.data.dropbox, this.dropboxAuth)),
         describeError: describeDropboxError,
+      },
+      {
+        source: new OnThisDaySource(
+          {
+            id: "on-this-day",
+            name: "On this day",
+            getYearsBack: () => this.data.onThisDay.yearsBack,
+            getExcerptHeading: () => this.data.onThisDay.excerptHeading,
+          },
+          this.vaultAccess(),
+        ),
+        emptyMessage: "No Daily Notes from previous years on this date.",
+        describeUnavailable: () => "On this day is unavailable.",
+        describeError: describeOnThisDayError,
       },
     ];
     for (const profile of this.data.browserHistory.profiles) {
