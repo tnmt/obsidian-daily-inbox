@@ -1,0 +1,56 @@
+.daily-inbox-source {
+  margin-bottom: 1.25rem;
+}
+
+.daily-inbox-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.daily-inbox-error {
+  color: var(--text-error);
+}
+
+.daily-inbox-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.daily-inbox-photo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.daily-inbox-photo-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: var(--background-secondary);
+}
+
+.daily-inbox-photo-fallback {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 4px;
+  background-color: var(--background-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 4px;
+}
+
+.daily-inbox-photo-caption {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

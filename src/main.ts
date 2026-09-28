@@ -156,9 +156,23 @@ class DailyInboxView extends ItemView {
       section.createEl("p", { text: "No photos for this date.", cls: "daily-inbox-empty" });
       return;
     }
-    const list = section.createEl("ul");
+    const grid = section.createDiv({ cls: "daily-inbox-photo-grid" });
     for (const item of state.items) {
-      list.createEl("li", { text: item.title ?? item.id });
+      const cell = grid.createDiv({ cls: "daily-inbox-photo" });
+      const label = item.title ?? item.id;
+      const tooltip = item.subtitle ? `${label} · ${item.subtitle}` : label;
+      cell.setAttr("title", tooltip);
+      if (item.thumbnail) {
+        const img = cell.createEl("img", { cls: "daily-inbox-photo-thumb" });
+        img.src = item.thumbnail;
+        img.alt = label;
+        img.loading = "lazy";
+      } else {
+        cell.createDiv({ cls: "daily-inbox-photo-fallback", text: "No preview" });
+      }
+      if (item.subtitle) {
+        cell.createDiv({ cls: "daily-inbox-photo-caption", text: item.subtitle });
+      }
     }
   }
 }

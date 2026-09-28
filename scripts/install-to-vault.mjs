@@ -14,10 +14,12 @@ await access(vaultPath);
 await access(resolve(vaultPath, ".obsidian"));
 await access("main.js");
 await access("manifest.json");
+await access("styles.css");
 const target = resolve(vaultPath, ".obsidian", "plugins", "daily-inbox");
 await mkdir(target, { recursive: true });
 await Promise.all([
   cp("main.js", resolve(target, "main.js")),
   cp("manifest.json", resolve(target, "manifest.json")),
+  cp("styles.css", resolve(target, "styles.css")),
 ]);
 console.log(`Installed Daily Inbox into ${target}`);
