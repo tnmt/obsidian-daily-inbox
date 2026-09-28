@@ -17,7 +17,7 @@ import { DropboxApiError, type HttpRequester } from "./http";
 import { DropboxSourceError } from "./errors";
 import { resolveEntryDate } from "./date-matching";
 import { resolveConfiguredFolderPaths } from "./folder-path-template";
-import { formatPhotoTime } from "./photo-time";
+import { comparePhotosByTime, formatPhotoTime } from "./photo-time";
 import { withAuthRetry } from "./with-auth-retry";
 
 export interface DropboxImagePayload {
@@ -77,7 +77,14 @@ export class DropboxSource implements ContextSource {
     try {
       const matched = await this.listMatchingEntries(context, signal);
       const thumbnails = await this.fetchThumbnails(matched, signal);
-      return matched.map((entry) => this.toContextItem(entry, thumbnails.get(entry.path_lower)));
+      return matched
+        .map((entry) => this.toContextItem(entry, thumbnails.get(entry.path_lower)))
+        .sort((a, b) =>
+          comparePhotosByTime(
+            { name: a.title ?? "", timestamp: a.timestamp },
+            { name: b.title ?? "", timestamp: b.timestamp },
+          ),
+        );
     } catch (err) {
       toSourceError(err);
     }

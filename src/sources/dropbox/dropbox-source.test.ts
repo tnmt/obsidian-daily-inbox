@@ -91,6 +91,20 @@ describe("DropboxSource.getItems", () => {
     expect((items[0].payload as DropboxImagePayload).path).toBe(matching.path_lower);
   });
 
+  it("returns items ordered by capture time regardless of listing order", async () => {
+    const late = fileEntry({ name: "2026-09-23_19-50-17.jpg", path_lower: "/c/late.jpg", id: "id:late" });
+    const early = fileEntry({ name: "2026-09-23 11.28.00.jpg", path_lower: "/c/early.jpg", id: "id:early" });
+    const http = routeHttp({
+      [LIST_FOLDER]: () => ok({ entries: [late, early], cursor: "c1", has_more: false }),
+      [GET_THUMBNAIL_BATCH]: () => ok({ entries: [] }),
+    });
+    const items = await new DropboxSource(http, mockAuth(), () => ["/c"]).getItems(
+      context("2026-09-23"),
+      new AbortController().signal,
+    );
+    expect(items.map((item) => item.id)).toEqual(["id:early", "id:late"]);
+  });
+
   it("follows has_more cursors to completion instead of truncating", async () => {
     const page1 = fileEntry({ id: "id:1", name: "2026-09-23 01.00.00.jpg" });
     const page2 = fileEntry({ id: "id:2", name: "2026-09-23 02.00.00.jpg" });
