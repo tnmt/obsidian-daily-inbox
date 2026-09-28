@@ -75,3 +75,27 @@
 .daily-inbox-photo.is-copyable:focus-visible .daily-inbox-photo-thumb {
   outline: 2px solid var(--interactive-accent);
 }
+
+.daily-inbox-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.daily-inbox-item {
+  min-width: 0;
+}
+
+.daily-inbox-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daily-inbox-item-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
