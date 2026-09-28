@@ -10,6 +10,8 @@ describe("dateFromCameraUploadFilename", () => {
     ["2026-09-23 12.34.56.jpg", "2026-09-23"],
     ["2026-09-23_12.34.56.jpg", "2026-09-23"],
     ["2026-01-01 00.00.00.png", "2026-01-01"],
+    ["2024-04-27_17-39-28.jpg", "2024-04-27"],
+    ["2024-04-27_17-53-36-1.jpg", "2024-04-27"],
   ])("extracts the date from %s", (name, expected) => {
     expect(dateFromCameraUploadFilename(name)).toBe(expected);
   });
