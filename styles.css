@@ -117,3 +117,38 @@
   letter-spacing: 0.02em;
   margin-top: 6px;
 }
+
+.daily-inbox-preview-frame {
+  display: flex;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.daily-inbox-preview-frame:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+}
+
+.daily-inbox-preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.daily-inbox-preview-frame .daily-inbox-photo-fallback {
+  width: 256px;
+  max-width: 100%;
+}
+
+.daily-inbox-preview-caption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.daily-inbox-preview-status {
+  margin-top: 4px;
+  font-size: 0.75rem;
+}

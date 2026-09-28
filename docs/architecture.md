@@ -326,3 +326,5 @@ Authentication material must live in Obsidian plugin data or an appropriate plat
 Prefer Obsidian's native DOM APIs for the first implementation. Avoid introducing React/Svelte unless complexity demonstrates a need.
 
 The first photo UI is a thumbnail grid grouped under a source/Photos section with timestamp metadata and explicit loading/error/empty states.
+
+Clicking a thumbnail opens a preview modal that downloads the original and shows it uncropped; clicking the preview copies the photo to the clipboard. The copy reuses the original the preview downloaded (a single-entry cache), so only one full-size download happens per photo selection.
