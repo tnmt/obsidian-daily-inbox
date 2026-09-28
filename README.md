@@ -41,6 +41,11 @@ Dropbox Camera Uploads (photo SSoT)
 
 The plugin should initially reduce the friction of finding today's photos. It should not replace Dropbox, R2, the existing image uploader, or the Daily Note.
 
+## Platform support
+
+Desktop only (Obsidian mobile is not supported). Developed and tested on
+**macOS and Linux**. Windows is not currently supported.
+
 ## Status
 
 Design / pre-alpha. See the roadmap and GitHub issues before implementing.

@@ -1,4 +1,7 @@
 import type { ContextAction, ContextItem, DailyContext } from "../domain";
+import { ClipboardUnsupportedError } from "./errors";
+
+export { ClipboardUnsupportedError };
 
 export interface OriginalImageFetcher {
   canFetch(item: ContextItem): boolean;
@@ -10,13 +13,6 @@ export interface ImageClipboard {
 }
 
 export type PngEncoder = (image: Blob) => Promise<Blob>;
-
-export class ClipboardUnsupportedError extends Error {
-  constructor() {
-    super("Copying images to the clipboard is not supported in this environment.");
-    this.name = "ClipboardUnsupportedError";
-  }
-}
 
 export class ImageDecodeError extends Error {
   constructor(public readonly cause?: unknown) {

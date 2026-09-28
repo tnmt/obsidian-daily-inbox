@@ -35,6 +35,8 @@ export interface ContextItem {
   readonly title?: string;
   readonly subtitle?: string;
   readonly thumbnail?: string;
+  /** Optional visual grouping hint for the view (e.g. a domain heading). Items should arrive pre-sorted so consecutive equal values render as one group. */
+  readonly groupLabel?: string;
   readonly payload: unknown;
 }
 

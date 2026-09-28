@@ -1,16 +1,19 @@
-import { ItemView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { readFile } from "fs/promises";
+import { homedir } from "os";
+import { ItemView, Notice, Platform, Plugin, PluginSettingTab, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
 import type { App } from "obsidian";
+import { ClipboardUnsupportedError } from "./actions/errors";
 import {
-  ClipboardUnsupportedError,
   CopyImageToClipboardAction,
   ImageDecodeError,
   encodePngWithCanvas,
   getBrowserImageClipboard,
 } from "./actions/copy-image-to-clipboard";
+import { CopyMarkdownLinkAction, getBrowserTextClipboard } from "./actions/copy-markdown-link";
 import { DailyInboxRefresher, partitionItems } from "./daily-inbox-refresh";
 import type { SectionState, SourceSection } from "./daily-inbox-refresh";
 import { FileNameDateResolver } from "./domain";
-import type { ContextItem, DailyContext, LocalDate } from "./domain";
+import type { ContextAction, ContextItem, DailyContext, LocalDate } from "./domain";
 import { DropboxAuthManager } from "./sources/dropbox/auth";
 import type { DropboxAuthPersistence, DropboxTokens } from "./sources/dropbox/auth";
 import { CancelledError } from "./sources/dropbox/cancel";
@@ -23,6 +26,18 @@ import { renderDropboxSettings } from "./sources/dropbox/settings-tab";
 import type { DropboxSettingsHost } from "./sources/dropbox/settings-tab";
 import { getDropboxSetupStatus } from "./sources/dropbox/setup-status";
 import type { DropboxSetupStatus } from "./sources/dropbox/setup-status";
+import { ChromiumHistorySource } from "./sources/browser-history/browser-history-source";
+import type { ChromiumBrowser, SupportedOs } from "./sources/browser-history/browser-paths";
+import { localStatePath } from "./sources/browser-history/browser-paths";
+import { BrowserHistorySourceError } from "./sources/browser-history/errors";
+import { createNodeHistoryDbRuntime } from "./sources/browser-history/history-db";
+import type { HistoryDbRuntime } from "./sources/browser-history/history-db";
+import { parseLocalStateProfiles } from "./sources/browser-history/local-state";
+import type { DetectedProfile } from "./sources/browser-history/local-state";
+import { DEFAULT_BROWSER_HISTORY_SETTINGS, resolveHistoryPath } from "./sources/browser-history/settings";
+import type { BrowserHistorySettings } from "./sources/browser-history/settings";
+import { renderBrowserHistorySettings } from "./sources/browser-history/settings-tab";
+import type { BrowserHistorySettingsHost } from "./sources/browser-history/settings-tab";
 
 export * from "./domain";
 
@@ -31,6 +46,7 @@ export const DAILY_INBOX_VIEW_TYPE = "daily-inbox-view";
 interface DailyInboxPluginData {
   dropbox: DropboxSettings;
   dropboxTokens?: DropboxTokens;
+  browserHistory: BrowserHistorySettings;
 }
 
 function describeDropboxError(err: unknown): string {
@@ -54,16 +70,48 @@ function describeDropboxUnavailable(status: DropboxSetupStatus): string {
   return "Dropbox is not connected. Connect it in Settings → Daily Inbox.";
 }
 
-function describeCopyError(err: unknown): string {
+function describeCopyImageError(err: unknown): string {
   if (err instanceof DropboxSourceError) return describeDropboxError(err);
   if (err instanceof ClipboardUnsupportedError) return err.message;
   if (err instanceof ImageDecodeError) return "This photo's format cannot be copied to the clipboard.";
   return "Could not copy the photo to the clipboard.";
 }
 
+function describeCopyMarkdownLinkError(err: unknown): string {
+  if (err instanceof ClipboardUnsupportedError) return err.message;
+  return "Could not copy the link to the clipboard.";
+}
+
+function describeBrowserHistoryError(err: unknown): string {
+  if (err instanceof BrowserHistorySourceError) {
+    switch (err.kind) {
+      case "sqlite3-missing":
+        return "The sqlite3 command-line tool was not found. Install it or check your PATH.";
+      case "unreadable":
+        return "Could not read this browser's History file.";
+      case "malformed":
+        return "Unexpected data was returned while reading browser history.";
+    }
+  }
+  return "Unexpected error while reading browser history.";
+}
+
+function describeBrowserHistoryUnavailable(): string {
+  return "No History file found for this profile. Check the path in Settings → Daily Inbox.";
+}
+
+// Default profile-path detection covers macOS and Linux (this plugin's two
+// supported desktop platforms, see docs/architecture.md's "Supported
+// platforms"). Anything else falls back to Linux-shaped paths, which will
+// simply not resolve — same net effect as before this distinction existed —
+// leaving the settings tab's custom path field as the way to configure it.
+function currentOs(): SupportedOs {
+  return Platform.isMacOS ? "macos" : "linux";
+}
+
 class DailyInboxView extends ItemView {
   private readonly dateResolver = new FileNameDateResolver();
-  private readonly refresher: DailyInboxRefresher;
+  private refresher!: DailyInboxRefresher;
   private readonly sectionEls = new Map<SourceSection, HTMLElement>();
   private context: DailyContext | undefined;
   private copyController?: AbortController;
@@ -78,10 +126,6 @@ class DailyInboxView extends ItemView {
     private readonly plugin: DailyInboxPlugin,
   ) {
     super(leaf);
-    this.refresher = new DailyInboxRefresher(plugin.sourceSections, (section, state) => {
-      const el = this.sectionEls.get(section);
-      if (el && this.context) this.renderSection(el, section, state, this.context);
-    });
   }
 
   getViewType(): string { return DAILY_INBOX_VIEW_TYPE; }
@@ -93,7 +137,7 @@ class DailyInboxView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.refresher.cancel();
+    this.refresher?.cancel();
     this.copyController?.abort();
   }
 
@@ -110,7 +154,15 @@ class DailyInboxView extends ItemView {
     if (key === this.lastRefreshKey) return;
     this.lastRefreshKey = key;
 
-    this.refresher.cancel();
+    this.refresher?.cancel();
+    // Rebuilt fresh each refresh (cheap: just wraps arrays), rather than once
+    // in the constructor, so a source list that changed in settings (e.g. a
+    // browser-history profile added/removed) is picked up without needing to
+    // detach/reopen this view.
+    this.refresher = new DailyInboxRefresher(this.plugin.sourceSections, (section, state) => {
+      const el = this.sectionEls.get(section);
+      if (el && this.context) this.renderSection(el, section, state, this.context);
+    });
     this.context = date && activeFile ? { date, activeFile } : undefined;
     this.render(date, this.context);
     if (this.context) await this.refresher.refresh(this.context);
@@ -169,7 +221,7 @@ class DailyInboxView extends ItemView {
     }
     const { images, others } = partitionItems(state.items);
     if (images.length > 0) this.renderImageGrid(el, images, context);
-    if (others.length > 0) this.renderItemList(el, others);
+    if (others.length > 0) this.renderItemList(el, others, context);
   }
 
   private renderImageGrid(el: HTMLElement, items: ContextItem[], context: DailyContext): void {
@@ -184,11 +236,11 @@ class DailyInboxView extends ItemView {
         cell.setAttr("role", "button");
         cell.setAttr("tabindex", "0");
         cell.setAttr("aria-label", `Copy ${label} to the clipboard`);
-        cell.addEventListener("click", () => this.copyItem(item, context));
+        cell.addEventListener("click", () => this.copyImage(item, context));
         cell.addEventListener("keydown", (evt) => {
           if (evt.key !== "Enter" && evt.key !== " ") return;
           evt.preventDefault();
-          this.copyItem(item, context);
+          this.copyImage(item, context);
         });
       }
       if (item.thumbnail) {
@@ -205,33 +257,74 @@ class DailyInboxView extends ItemView {
     }
   }
 
-  private renderItemList(el: HTMLElement, items: ContextItem[]): void {
+  private renderItemList(el: HTMLElement, items: ContextItem[], context: DailyContext): void {
     const list = el.createEl("ul", { cls: "daily-inbox-item-list" });
+    let lastGroupLabel: string | undefined;
     for (const item of items) {
+      // Items arrive pre-sorted by their source, so a boundary is drawn
+      // whenever the group changes rather than by re-sorting/grouping here.
+      if (item.groupLabel !== undefined && item.groupLabel !== lastGroupLabel) {
+        list.createEl("li", { cls: "daily-inbox-group-label", text: item.groupLabel });
+        lastGroupLabel = item.groupLabel;
+      }
       const entry = list.createEl("li", { cls: "daily-inbox-item" });
-      entry.createDiv({ cls: "daily-inbox-item-title", text: item.title ?? item.id });
+      const label = item.title ?? item.id;
+      if (this.plugin.copyMarkdownLinkAction.canHandle(item)) {
+        entry.addClass("is-copyable");
+        entry.setAttr("role", "button");
+        entry.setAttr("tabindex", "0");
+        entry.setAttr("aria-label", `Copy ${label} as a Markdown link`);
+        entry.addEventListener("click", () => this.copyMarkdownLink(item, context));
+        entry.addEventListener("keydown", (evt) => {
+          if (evt.key !== "Enter" && evt.key !== " ") return;
+          evt.preventDefault();
+          this.copyMarkdownLink(item, context);
+        });
+      }
+      entry.createDiv({ cls: "daily-inbox-item-title", text: label });
       if (item.subtitle) entry.createDiv({ cls: "daily-inbox-item-subtitle", text: item.subtitle });
     }
   }
 
+  private copyImage(item: ContextItem, context: DailyContext): void {
+    this.runAction(this.plugin.copyImageAction, item, context, {
+      progressText: "Copying photo…",
+      successText: "Photo copied. Paste it into your note.",
+      describeError: describeCopyImageError,
+    });
+  }
+
+  private copyMarkdownLink(item: ContextItem, context: DailyContext): void {
+    this.runAction(this.plugin.copyMarkdownLinkAction, item, context, {
+      progressText: "Copying link…",
+      successText: "Link copied. Paste it into your note.",
+      describeError: describeCopyMarkdownLinkError,
+    });
+  }
+
   // Must stay synchronous up to action.run(): the clipboard write has to start
   // inside the click/keydown's user activation.
-  private copyItem(item: ContextItem, context: DailyContext): void {
+  private runAction(
+    action: ContextAction,
+    item: ContextItem,
+    context: DailyContext,
+    opts: { progressText: string; successText: string; describeError: (err: unknown) => string },
+  ): void {
     this.copyController?.abort();
     const controller = new AbortController();
     this.copyController = controller;
-    const progress = new Notice("Copying photo…", 0);
-    this.plugin.copyImageAction.run(item, context, controller.signal).then(
+    const progress = new Notice(opts.progressText, 0);
+    action.run(item, context, controller.signal).then(
       () => {
         progress.hide();
         if (controller.signal.aborted) return;
-        new Notice("Photo copied. Paste it into your note.");
+        new Notice(opts.successText);
       },
       (err: unknown) => {
         progress.hide();
         if (err instanceof CancelledError || controller.signal.aborted) return;
-        console.error("Daily Inbox: failed to copy photo", err);
-        new Notice(describeCopyError(err));
+        console.error("Daily Inbox: action failed", err);
+        new Notice(opts.describeError(err));
       },
     );
   }
@@ -257,9 +350,23 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
     await this.plugin.savePluginData();
   }
 
+  private get browserHistoryHost(): BrowserHistorySettingsHost {
+    return {
+      settings: this.plugin.data.browserHistory,
+      saveSettings: () => this.plugin.savePluginData(),
+      detectProfiles: (browser) => this.plugin.detectBrowserProfiles(browser),
+      resolvePath: (profile) => resolveHistoryPath(profile, homedir(), currentOs()),
+    };
+  }
+
   display(): void {
     this.containerEl.empty();
     renderDropboxSettings(this.containerEl, this, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
+    renderBrowserHistorySettings(this.containerEl, this.browserHistoryHost, () => {
+      this.plugin.rebuildSourceSections();
       this.plugin.refreshAllViews();
       this.display();
     });
@@ -267,17 +374,23 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
 }
 
 export default class DailyInboxPlugin extends Plugin {
-  data: DailyInboxPluginData = { dropbox: { ...DEFAULT_DROPBOX_SETTINGS } };
+  data: DailyInboxPluginData = {
+    dropbox: { ...DEFAULT_DROPBOX_SETTINGS },
+    browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS },
+  };
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
   copyImageAction!: CopyImageToClipboardAction;
+  copyMarkdownLinkAction!: CopyMarkdownLinkAction;
   sourceSections!: SourceSection[];
+  private historyDbRuntime!: HistoryDbRuntime;
 
   async onload(): Promise<void> {
     const loaded = (await this.loadData()) as Partial<DailyInboxPluginData> | null;
     this.data = {
       dropbox: { ...DEFAULT_DROPBOX_SETTINGS, ...loaded?.dropbox },
       dropboxTokens: loaded?.dropboxTokens,
+      browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
     };
 
     const persistence: DropboxAuthPersistence = {
@@ -289,16 +402,10 @@ export default class DailyInboxPlugin extends Plugin {
     };
     this.dropboxAuth = new DropboxAuthManager(requestUrl, () => this.data.dropbox.clientId, persistence);
     this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPath);
+    this.historyDbRuntime = createNodeHistoryDbRuntime();
+    this.rebuildSourceSections();
+
     const dropboxSource = this.dropboxSource;
-    this.sourceSections = [
-      {
-        source: dropboxSource,
-        emptyMessage: "No photos for this date.",
-        describeUnavailable: () =>
-          describeDropboxUnavailable(getDropboxSetupStatus(this.data.dropbox, this.dropboxAuth)),
-        describeError: describeDropboxError,
-      },
-    ];
     this.copyImageAction = new CopyImageToClipboardAction(
       {
         canFetch: (item) => item.sourceId === dropboxSource.id,
@@ -308,6 +415,7 @@ export default class DailyInboxPlugin extends Plugin {
       getBrowserImageClipboard,
       encodePngWithCanvas,
     );
+    this.copyMarkdownLinkAction = new CopyMarkdownLinkAction(getBrowserTextClipboard);
 
     this.registerView(DAILY_INBOX_VIEW_TYPE, (leaf) => new DailyInboxView(leaf, this));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
@@ -334,7 +442,49 @@ export default class DailyInboxPlugin extends Plugin {
     await this.saveData(this.data);
   }
 
-  /** Forces every open Daily Inbox view to re-query its sources, e.g. after Dropbox settings or auth state change. */
+  /** Rebuilds the source/section list from current settings — the number of browser-history sources can change (profiles added/removed), unlike Dropbox's fixed single section. */
+  rebuildSourceSections(): void {
+    const dropboxSource = this.dropboxSource;
+    const sections: SourceSection[] = [
+      {
+        source: dropboxSource,
+        emptyMessage: "No photos for this date.",
+        describeUnavailable: () =>
+          describeDropboxUnavailable(getDropboxSetupStatus(this.data.dropbox, this.dropboxAuth)),
+        describeError: describeDropboxError,
+      },
+    ];
+    for (const profile of this.data.browserHistory.profiles) {
+      const source = new ChromiumHistorySource(
+        {
+          id: `browser-history:${profile.configId}`,
+          name: profile.label,
+          getHistoryPath: () => resolveHistoryPath(profile, homedir(), currentOs()),
+          getExcludedDomains: () => profile.excludedDomains,
+        },
+        this.historyDbRuntime,
+        () => Platform.isDesktopApp,
+      );
+      sections.push({
+        source,
+        emptyMessage: "No pages visited on this date.",
+        describeUnavailable: describeBrowserHistoryUnavailable,
+        describeError: describeBrowserHistoryError,
+      });
+    }
+    this.sourceSections = sections;
+  }
+
+  async detectBrowserProfiles(browser: ChromiumBrowser): Promise<DetectedProfile[]> {
+    try {
+      const text = await readFile(localStatePath(browser, homedir(), currentOs()), "utf8");
+      return parseLocalStateProfiles(text);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Forces every open Daily Inbox view to re-query its sources, e.g. after settings or auth state change. */
   refreshAllViews(): void {
     this.forEachView((view) => void view.forceRefresh());
   }

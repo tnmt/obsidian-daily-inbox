@@ -99,3 +99,21 @@
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+
+.daily-inbox-item.is-copyable {
+  cursor: pointer;
+}
+
+.daily-inbox-item.is-copyable:hover .daily-inbox-item-title,
+.daily-inbox-item.is-copyable:focus-visible .daily-inbox-item-title {
+  color: var(--interactive-accent);
+}
+
+.daily-inbox-group-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-top: 6px;
+}
