@@ -10,6 +10,10 @@ describe("formatPhotoTime", () => {
     expect(formatPhotoTime("2026-09-23_08.05.00.jpg")).toBe("08:05");
   });
 
+  it("accepts hyphen-separated time in an archived Camera Uploads filename", () => {
+    expect(formatPhotoTime("2023-09-29_19-50-17.jpg")).toBe("19:50");
+  });
+
   it("falls back to the local time of the timestamp when the filename has no time", () => {
     const ts = new Date(2026, 8, 23, 7, 8, 0);
     expect(formatPhotoTime("IMG_0001.jpg", ts)).toBe("07:08");
