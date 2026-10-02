@@ -19,6 +19,7 @@ import {
   encodePngWithCanvas,
   getBrowserImageClipboard,
 } from "./actions/copy-image-to-clipboard";
+import { CopyActivityTextAction } from "./actions/copy-activity-text";
 import { CopyMarkdownLinkAction, getBrowserTextClipboard } from "./actions/copy-markdown-link";
 import { OpenNoteAction } from "./actions/open-note";
 import { SingleOriginalImageCache } from "./actions/original-image-cache";
@@ -58,6 +59,12 @@ import type { OnThisDaySettings } from "./sources/on-this-day/settings";
 import { renderOnThisDaySettings } from "./sources/on-this-day/settings-tab";
 import type { OnThisDaySettingsHost } from "./sources/on-this-day/settings-tab";
 import type { VaultAccess } from "./sources/on-this-day/vault-access";
+import { LocationSourceError } from "./sources/location/errors";
+import { LocationSource } from "./sources/location/location-source";
+import { DEFAULT_LOCATION_SETTINGS } from "./sources/location/settings";
+import type { LocationSettings } from "./sources/location/settings";
+import { renderLocationSettings } from "./sources/location/settings-tab";
+import type { LocationSettingsHost } from "./sources/location/settings-tab";
 
 export * from "./domain";
 
@@ -68,6 +75,7 @@ interface DailyInboxPluginData {
   dropboxTokens?: DropboxTokens;
   browserHistory: BrowserHistorySettings;
   onThisDay: OnThisDaySettings;
+  location: LocationSettings;
 }
 
 function describeDropboxError(err: unknown): string {
@@ -105,6 +113,27 @@ function describeCopyMarkdownLinkError(err: unknown): string {
 
 function describeOpenNoteError(): string {
   return "Could not open that note.";
+}
+
+function describeLocationError(err: unknown): string {
+  if (err instanceof LocationSourceError) {
+    switch (err.kind) {
+      case "auth-required":
+        return "The location server rejected the read token. Check it in Settings → Daily Inbox.";
+      case "not-found":
+        return "No location API at the configured server URL. Check it in Settings → Daily Inbox.";
+      case "transient":
+        return "Could not reach the location server. Try refreshing.";
+      case "malformed":
+        return "The location server returned unexpected data.";
+    }
+  }
+  return "Unexpected error while querying the location server.";
+}
+
+function describeCopyActivityTextError(err: unknown): string {
+  if (err instanceof ClipboardUnsupportedError) return err.message;
+  return "Could not copy the text to the clipboard.";
 }
 
 function describeOnThisDayError(): string {
@@ -330,6 +359,12 @@ class DailyInboxView extends ItemView {
         run: (item, context) => this.copyMarkdownLink(item, context),
       };
     }
+    if (this.plugin.copyActivityTextAction.canHandle(item)) {
+      return {
+        ariaLabel: (label) => `Copy ${label} as text`,
+        run: (item, context) => this.copyActivityText(item, context),
+      };
+    }
     if (this.plugin.openNoteAction.canHandle(item)) {
       return {
         ariaLabel: (label) => `Open ${label}`,
@@ -361,6 +396,14 @@ class DailyInboxView extends ItemView {
       progressText: "Copying link…",
       successText: "Link copied. Paste it into your note.",
       describeError: describeCopyMarkdownLinkError,
+    });
+  }
+
+  private copyActivityText(item: ContextItem, context: DailyContext): void {
+    this.runAction(this.plugin.copyActivityTextAction, item, context, {
+      progressText: "Copying…",
+      successText: "Copied. Paste it into your note.",
+      describeError: describeCopyActivityTextError,
     });
   }
 
@@ -436,9 +479,20 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
     };
   }
 
+  private get locationHost(): LocationSettingsHost {
+    return {
+      settings: this.plugin.data.location,
+      saveSettings: () => this.plugin.savePluginData(),
+    };
+  }
+
   display(): void {
     this.containerEl.empty();
     renderDropboxSettings(this.containerEl, this, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
+    renderLocationSettings(this.containerEl, this.locationHost, () => {
       this.plugin.refreshAllViews();
       this.display();
     });
@@ -459,12 +513,14 @@ export default class DailyInboxPlugin extends Plugin {
     dropbox: { ...DEFAULT_DROPBOX_SETTINGS },
     browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS },
     onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS },
+    location: { ...DEFAULT_LOCATION_SETTINGS },
   };
   dropboxAuth!: DropboxAuthManager;
   dropboxSource!: DropboxSource;
   originalImageCache!: SingleOriginalImageCache;
   copyImageAction!: CopyImageToClipboardAction;
   copyMarkdownLinkAction!: CopyMarkdownLinkAction;
+  copyActivityTextAction!: CopyActivityTextAction;
   openNoteAction!: OpenNoteAction;
   sourceSections!: SourceSection[];
   private historyDbRuntime!: HistoryDbRuntime;
@@ -476,6 +532,7 @@ export default class DailyInboxPlugin extends Plugin {
       dropboxTokens: loaded?.dropboxTokens,
       browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
       onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS, ...loaded?.onThisDay },
+      location: { ...DEFAULT_LOCATION_SETTINGS, ...loaded?.location },
     };
 
     const persistence: DropboxAuthPersistence = {
@@ -504,6 +561,7 @@ export default class DailyInboxPlugin extends Plugin {
       encodePngWithCanvas,
     );
     this.copyMarkdownLinkAction = new CopyMarkdownLinkAction(getBrowserTextClipboard);
+    this.copyActivityTextAction = new CopyActivityTextAction(getBrowserTextClipboard);
     const noteOpener: NoteOpener = {
       open: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -579,6 +637,13 @@ export default class DailyInboxPlugin extends Plugin {
         describeUnavailable: () =>
           describeDropboxUnavailable(getDropboxSetupStatus(this.data.dropbox, this.dropboxAuth)),
         describeError: describeDropboxError,
+      },
+      {
+        source: new LocationSource(requestUrl, () => this.data.location),
+        emptyMessage: "No location data for this date.",
+        describeUnavailable: () =>
+          "Location is not configured. Set the server URL and read token in Settings → Daily Inbox.",
+        describeError: describeLocationError,
       },
       {
         source: new OnThisDaySource(
