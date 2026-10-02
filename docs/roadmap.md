@@ -48,6 +48,7 @@ The Daily Inbox view renders one section per Context Source, so each of these is
 - Obsidian Notes: notes created/modified on the date;
 - Claude Code sessions active on the date;
 - Browser history / read-later items from the date.
+- Location: stays and moves on the date from a self-hosted overland-server (#25).
 
 ## Later source candidates
 

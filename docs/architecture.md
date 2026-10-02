@@ -277,6 +277,34 @@ time (present on macOS/Linux CI runners and developer machines), including a
 variant that keeps a `sqlite3` process alive across a mid-session copy to
 exercise WAL replay directly.
 
+## Location source
+
+Shows where the user stayed and how they moved on the date. The authoritative
+store is a self-hosted [overland-server](https://github.com/tnmt/overland-server)
+instance, which collects phone location uploads, imports Google Maps Timeline
+exports, detects stays and attaches user-chosen place names. Daily Inbox only
+reads its `GET /api/days/{YYYY-MM-DD}` and does not keep a copy.
+
+Responsibilities (`src/sources/location/`):
+
+- call the server through `requestUrl` with `Authorization: Bearer <token>`;
+  base URL and token live in plugin settings and the source is unavailable
+  until both are set;
+- map each stay and move to an `activity`-typed `ContextItem`, chronologically,
+  with a pre-rendered one-line text payload for `CopyActivityTextAction`;
+- report 401/403, 404, network/5xx and unexpected JSON as distinct
+  `LocationSourceError` kinds, contained to the section.
+
+Times are displayed from the wall-clock part of the server's RFC 3339
+timestamps rather than converted to the local machine's zone: the server
+defines which calendar day a stay belongs to, and converting would make a stay
+appear to start or end on a different date than the one it was returned for.
+Stays that began on the previous day (typically the night at home) show their
+start date.
+
+Place naming stays on the server. Naming places from Daily Inbox would need a
+write API there and is not part of this source.
+
 ## Actions
 
 v0.1 should minimize coupling with the existing S3 Image Uploader.
@@ -292,6 +320,10 @@ ContextItem (Dropbox image)
 ```
 
 Do not synthesize paste events or depend on another plugin's private implementation.
+
+`CopyActivityTextAction` copies the text an `activity` item's source prepared
+in its payload (e.g. `09:39–11:15 Office` for a stay). It matches on type and
+payload shape, so the view needs no knowledge of the Location source.
 
 The async Clipboard API only accepts `image/png` for image writes, so non-PNG originals (camera JPEGs) are decoded and re-encoded as PNG before copying. The pasted file is therefore a PNG that is typically several times larger than the original JPEG, and that PNG is what S3 Image Uploader uploads. Formats the platform cannot decode (e.g. HEIC on desktop Chromium) fail with an explicit error. If upload size becomes a problem in real use, revisit this (e.g. downscaling, or the direct-publish path below) rather than working around the clipboard.
 
