@@ -8,7 +8,9 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "test": "vitest run",
     "typecheck": "tsc -noEmit -skipLibCheck",
-    "dev:install": "node scripts/install-to-vault.mjs"
+    "dev:install": "node scripts/install-to-vault.mjs",
+    "prepare": "git config core.hooksPath .githooks",
+    "leaks": "git -c core.quotePath=false log --all --name-only --format= | scripts/check-forbidden-paths.sh && gitleaks git --log-opts=--all --redact --verbose . && gitleaks dir --redact --verbose ."
   },
   "devDependencies": {
     "@types/node": "latest",

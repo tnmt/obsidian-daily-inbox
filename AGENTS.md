@@ -10,7 +10,7 @@ Read `README.md`, `docs/product.md`, `docs/architecture.md`, and `docs/roadmap.m
 - Dropbox remains authoritative for v0.1 photos.
 - Do not replace or integrate against private internals of the existing S3 Image Uploader in v0.1.
 - Do not implement public-journal publishing as part of Daily Inbox.
-- Never commit credentials, private notes, or real personal photos.
+- Never commit credentials, private notes, or real personal photos. The gitleaks hooks and CI enforce this; do not bypass them with `--no-verify` or widen `.gitleaks.toml` allowlists to make a real value pass.
 - Keep source failures isolated.
 - Correct local-date semantics and cancellation of stale asynchronous requests matter more than feature breadth.
 

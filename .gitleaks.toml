@@ -1,0 +1,141 @@
+title = "obsidian-daily-inbox"
+
+# The default ruleset catches well-known credential formats. The custom rules
+# below target what is specific to this plugin: OAuth app credentials typed into
+# settings, data pulled from the user's sources (location, photos, browser
+# history, notes), and identifiers of the developer's own machines and network.
+[extend]
+useDefault = true
+
+# `dropbox-api-token` matches the `DropboxSettings` type name.
+[[allowlists]]
+description = "Type names that look like Dropbox tokens"
+targetRules = ["dropbox-api-token"]
+regexTarget = "match"
+regexes = ['''DropboxSettings''']
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+# Default `generic-api-key` requires high entropy, which misses short or
+# low-entropy real values such as Dropbox app keys. Test fixtures in this repo
+# use values of at most a few characters ("at-1", "cid", "sec").
+[[rules]]
+id = "credential-literal"
+description = "Credential-named field assigned a literal value"
+regex = '''(?i)\b(?:client_?id|client_?secret|app_?key|app_?secret|access_?token|refresh_?token|api_?key|api_?token|auth_?token|bearer|token|secret|password|passwd)\b["']?\s*[:=]\s*["'`]([^"'`\s$]{12,})["'`]'''
+secretGroup = 1
+keywords = ["client", "app", "token", "key", "secret", "bearer", "pass"]
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = [
+  '''(?i)example|placeholder|dummy|fake|redacted|changeme|your[-_]''',
+  '''^https?://''',
+]
+
+[[rules]]
+id = "authorization-header"
+description = "Literal Authorization header value"
+regex = '''(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+keywords = ["bearer", "basic"]
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)example|placeholder|dummy|fake|redacted''']
+
+# Withings client IDs and secrets, and many OAuth tokens, are 64-char hex.
+[[rules]]
+id = "hex64-string"
+description = "64-character hex string (OAuth client credential or token)"
+regex = '''\b[0-9a-fA-F]{64}\b'''
+[[rules.allowlists]]
+paths = ['''(?:^|/)pnpm-lock\.yaml$''']
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''(?i)sha256''']
+
+# ---------------------------------------------------------------------------
+# Personal data from sources
+# ---------------------------------------------------------------------------
+
+# Fixtures must use rounded coordinates (e.g. `latitude: 35`).
+[[rules]]
+id = "precise-coordinate-field"
+description = "Precise latitude/longitude value"
+regex = '''(?i)\b(?:lat|lng|lon|latitude|longitude)\b["']?\s*[:=]\s*-?\d{1,3}\.\d{3,}'''
+keywords = ["lat", "lng", "lon"]
+
+[[rules]]
+id = "precise-coordinate-pair"
+description = "Precise coordinate pair"
+regex = '''-?\b\d{1,2}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}\b'''
+[[rules.allowlists]]
+paths = ['''(?:^|/)pnpm-lock\.yaml$''']
+
+# File-type checks live in scripts/check-forbidden-paths.sh: the default
+# global allowlist skips image extensions and git scans skip binary diffs.
+
+# ---------------------------------------------------------------------------
+# Developer environment
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "home-directory-path"
+description = "Absolute home directory path"
+regex = '''(?:/Users/|/home/|[A-Za-z]:\\\\?Users\\\\?)([A-Za-z0-9._-]+)'''
+secretGroup = 1
+keywords = ["/users/", "/home/", "users\\"]
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''^(?:example|alice|bob|user|me|you|runner|Shared|Public)$''']
+
+[[rules]]
+id = "email-address"
+description = "Email address"
+regex = '''\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b'''
+keywords = ["@"]
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = [
+  '''@users\.noreply\.github\.com$''',
+  '''^noreply@(?:github|anthropic)\.com$''',
+  '''@(?:[A-Za-z0-9-]+\.)*(?:example|test|invalid|localhost)$''',
+  '''@(?:[A-Za-z0-9-]+\.)*example\.(?:com|net|org)$''',
+]
+[[rules.allowlists]]
+paths = ['''(?:^|/)pnpm-lock\.yaml$''']
+
+# Every external host the plugin talks to must be listed here, so a personal
+# server URL (e.g. a self-hosted overland-server) cannot slip into code or docs.
+[[rules]]
+id = "unlisted-url-host"
+description = "URL host not in the allowlist"
+regex = '''(?i)\b(?:https?|wss?)://([A-Za-z0-9.-]+)'''
+secretGroup = 1
+keywords = ["http", "ws"]
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = [
+  '''(?i)^(?:[a-z0-9-]+\.)*(?:example|test|invalid|localhost)$''',
+  '''(?i)^(?:[a-z0-9-]+\.)*example\.(?:com|net|org)$''',
+  '''^(?:localhost|127\.0\.0\.1|x)$''',
+  '''(?i)^(?:api|content|www)\.dropboxapi\.com$|^(?:www\.)?dropbox\.com$''',
+  '''(?i)^(?:wbsapi|account|developer)\.withings\.(?:net|com)$''',
+  '''(?i)^(?:www\.)?github\.com$|^raw\.githubusercontent\.com$''',
+  '''(?i)^(?:docs\.)?obsidian\.md$''',
+  '''(?i)^(?:registry\.npmjs\.org|www\.npmjs\.com|claude\.com)$''',
+]
+[[rules.allowlists]]
+paths = ['''(?:^|/)pnpm-lock\.yaml$''']
+
+[[rules]]
+id = "private-network-address"
+description = "Private, CGNAT (Tailscale) or link-local IPv4 address"
+regex = '''\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])|169\.254)\.\d{1,3}\.\d{1,3}\b'''
+
+[[rules]]
+id = "private-hostname"
+description = "Hostname on a private DNS zone"
+regex = '''(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ts\.net|local|lan|internal|home\.arpa|localdomain)\b'''
+keywords = [".ts.net", ".local", ".lan", ".internal", ".home.arpa", ".localdomain"]

@@ -46,6 +46,20 @@ The plugin should initially reduce the friction of finding today's photos. It sh
 Desktop only (Obsidian mobile is not supported). Developed and tested on
 **macOS and Linux**. Windows is not currently supported.
 
+## Leak prevention
+
+This repository is public. `pnpm install` sets `core.hooksPath` to `.githooks`,
+which runs [gitleaks](https://github.com/gitleaks/gitleaks) (provided by the
+Nix dev shell) on staged changes, commit messages, and every commit before
+push. `scripts/check-forbidden-paths.sh` additionally rejects photos, location
+tracks, browser history databases, vault config, and notes outside `docs/`.
+CI repeats both checks over the full history. Run `pnpm leaks` to scan locally.
+
+Rules live in `.gitleaks.toml`. They also flag precise coordinates, home
+directory paths, email addresses, private network addresses, and URLs whose
+host is not explicitly allowlisted. Use placeholder values in tests and docs
+(`example.com`, `/Users/example`, `latitude: 35`) rather than allowlisting.
+
 ## Status
 
 Design / pre-alpha. See the roadmap and GitHub issues before implementing.

@@ -1,0 +1,3 @@
+#!/bin/sh
+. "$(dirname "$0")/_gitleaks.sh"
+exec gitleaks stdin --redact --no-banner --verbose < "$1"

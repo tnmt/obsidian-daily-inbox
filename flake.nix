@@ -7,7 +7,7 @@
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in {
       devShells = forEachSystem (pkgs: {
-        default = pkgs.mkShell { packages = [ pkgs.nodejs_22 pkgs.pnpm ]; };
+        default = pkgs.mkShell { packages = [ pkgs.nodejs_22 pkgs.pnpm pkgs.gitleaks ]; };
       });
     };
 }

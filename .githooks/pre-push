@@ -1,0 +1,14 @@
+#!/bin/sh
+# Re-scans every commit about to leave the machine, which also covers commits
+# created with `git commit --no-verify`.
+. "$(dirname "$0")/_gitleaks.sh"
+
+remote="$1"
+zero=0000000000000000000000000000000000000000
+
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  git -c core.quotePath=false log --name-only --format= "$local_sha" --not --remotes="$remote" |
+    "$REPO_ROOT/scripts/check-forbidden-paths.sh"
+  gitleaks git --log-opts="$local_sha --not --remotes=$remote" --redact --no-banner --verbose
+done

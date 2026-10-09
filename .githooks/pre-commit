@@ -1,0 +1,4 @@
+#!/bin/sh
+. "$(dirname "$0")/_gitleaks.sh"
+git -c core.quotePath=false diff --cached --name-only --diff-filter=ACR | "$REPO_ROOT/scripts/check-forbidden-paths.sh"
+exec gitleaks git --pre-commit --staged --redact --no-banner --verbose
