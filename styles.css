@@ -95,6 +95,13 @@
   white-space: nowrap;
 }
 
+/* Activity titles are short summaries (e.g. a list of body measurements) that
+   lose information when cut off; other item types keep a single ellipsized line. */
+.daily-inbox-item.is-activity .daily-inbox-item-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .daily-inbox-item-subtitle {
   font-size: 0.75rem;
   color: var(--text-muted);
