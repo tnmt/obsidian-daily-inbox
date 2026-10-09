@@ -23,6 +23,12 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const clock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const firstLine = (message: string) => message.split(/\r?\n/, 1)[0];
 
+// Titles are arbitrary text pasted into a note, where "<T>", "*x*", "#tag" or
+// "[[link]]" would otherwise be rendered instead of shown.
+function escapeMarkdownText(text: string): string {
+  return text.replace(/[\\`*_[\]<>!|~#]/g, "\\$&").replace(/[\r\n]+/g, " ");
+}
+
 export class GitHubSource implements ContextSource {
   readonly id = "github";
   readonly name = "GitHub";
@@ -123,7 +129,7 @@ export class GitHubSource implements ContextSource {
 
     return list.map((e): ContextItem => {
       const payload: ActivityTextPayload = {
-        text: `${clock(e.at)} ${e.label} [${e.reference}](${e.url}) ${e.title}`,
+        text: `${clock(e.at)} ${e.label} [${e.reference}](${e.url}) ${escapeMarkdownText(e.title)}`,
       };
       return {
         id: e.id,
