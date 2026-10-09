@@ -305,6 +305,64 @@ start date.
 Place naming stays on the server. Naming places from Daily Inbox would need a
 write API there and is not part of this source.
 
+## Withings source
+
+Shows body measurements recorded on the date (#27). The authoritative store is
+the Withings cloud; Daily Inbox reads it through the public API and keeps no
+copy. Only `getmeas` (scope `user.metrics`) is in scope: weight, body
+composition, standing heart rate, pulse wave velocity and vascular age from a
+Body Cardio scale. Steps and sleep need other devices and are out of scope.
+
+Findings from a real Body Cardio account:
+
+- `POST https://wbsapi.withings.net/measure`, `action=getmeas`, with
+  `startdate`/`enddate` as Unix timestamps. Values decode as
+  `value * 10^unit`. The response carries `timezone` (`Asia/Tokyo`).
+- Returned types: weight 1, fat-free mass 5, fat ratio 6, fat mass 8, heart
+  rate 11, muscle mass 76, hydration 77, bone mass 88, pulse wave velocity 91,
+  vascular age 155. PWV and vascular age are returned even though the docs
+  call scale cardio metrics EU-only.
+- A response holds at most 1000 groups (`more`/`offset` to page); fetching one
+  date's range never needs paging. History goes back to 2016.
+- A day can hold up to 12 groups: weight + body composition, heart rate, and
+  PWV + vascular age arrive as separate groups.
+- Rate limit: one poll per 10 minutes per user (status 601).
+- Access token 3 h; refresh token 1 year and rotated on every refresh. The
+  previous refresh token stays valid for 8 hours after rotation (per the
+  docs, not exercised).
+- The authorization code expires in 30 seconds.
+
+Decisions proposed here and open to review before implementation:
+
+- **Authorization.** Each user registers their own Withings application and
+  enters its Client ID and Client Secret in settings. A shared application
+  would need Withings' production review, which is not assumed. The plugin
+  starts a loopback HTTP listener on `127.0.0.1` (fixed port, registered as the
+  redirect URI) only while an authorization is pending, exchanges the code
+  immediately, and closes the listener. `obsidian://` as a redirect is
+  untested and not relied on. Whether the token endpoint accepts PKCE instead
+  of a client secret is unverified.
+- **Token storage.** Tokens and the secret live in plugin data like the other
+  sources' credentials. Refreshes are serialized so two concurrent refreshes
+  cannot invalidate each other, and the new refresh token is persisted before
+  the new access token is used.
+- **Aggregation.** `getmeas` groups are merged when their timestamps fall
+  within 30 minutes of each other, so one weigh-in session becomes one
+  `activity` item (e.g. `07:12 Weight 55.7kg / Fat 15.7% / Muscle 44.4kg / PWV
+  6.0m/s`). The window is a starting value to be tuned against real data.
+- **Date range.** The query range is the local calendar day's start and end as
+  Unix timestamps; items are placed on the date using the response `timezone`,
+  not the machine's zone.
+- **Rate limit.** A short in-memory cache keyed by date avoids hitting the
+  10-minute limit on date switches and manual refreshes. It is disposable and
+  not persisted.
+- **Errors.** Authorization failure/expired refresh token, rate limit (601),
+  network/5xx and malformed responses are distinct `WithingsSourceError`
+  kinds, contained to the section.
+
+Development-phase applications may use HTTP/loopback redirect URIs but are
+capped at 10 users, which is acceptable for per-user applications.
+
 ## Actions
 
 v0.1 should minimize coupling with the existing S3 Image Uploader.
