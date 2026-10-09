@@ -50,10 +50,10 @@ The Daily Inbox view renders one section per Context Source, so each of these is
 - Browser history / read-later items from the date.
 - Location: stays and moves on the date from a self-hosted overland-server (#25).
 - Withings: body measurements (weight, body composition, cardio metrics) on the date from the Withings public API (#27).
+- GitHub: commits, pull requests and issues of the user on the date (#29).
 
 ## Later source candidates
 
-- GitHub activity;
 - lightweight capture source;
 - other photo providers.
 
