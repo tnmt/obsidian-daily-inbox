@@ -170,7 +170,7 @@ describe("GitHubSource", () => {
   });
 
   it("escapes Markdown syntax in titles of the copied text but not in the displayed title", async () => {
-    const title = "Fix <T> and *wildcards* with `code`, #tag, [[link]] and ![img](x)";
+    const title = "Fix <T> and *wildcards* with `code`, #tag, [[link]] and ![img](x), %%c%% and ==h==";
     const { source } = sourceFor({
       commits: [commit("eeeeeee5555", "tnmt/a", "2026-10-09T09:30:00.000+09:00", title)],
       created: [],
@@ -180,7 +180,7 @@ describe("GitHubSource", () => {
     expect(item.title).toBe(title);
     expect((item.payload as { text: string }).text).toBe(
       "09:30 Commit [tnmt/a@eeeeeee](https://github.com/tnmt/a/commit/eeeeeee5555) " +
-        "Fix \\<T\\> and \\*wildcards\\* with \\`code\\`, \\#tag, \\[\\[link\\]\\] and \\!\\[img\\](x)",
+        "Fix \\<T\\> and \\*wildcards\\* with \\`code\\`, \\#tag, \\[\\[link\\]\\] and \\!\\[img\\](x), \\%\\%c\\%\\% and \\=\\=h\\=\\=",
     );
   });
 });

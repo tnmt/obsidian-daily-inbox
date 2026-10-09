@@ -23,10 +23,10 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const clock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const firstLine = (message: string) => message.split(/\r?\n/, 1)[0];
 
-// Titles are arbitrary text pasted into a note, where "<T>", "*x*", "#tag" or
-// "[[link]]" would otherwise be rendered instead of shown.
+// Titles are arbitrary text pasted into a note, where "<T>", "*x*", "#tag", "[[link]]",
+// "%%comment%%" or "==highlight==" would otherwise be rendered instead of shown.
 function escapeMarkdownText(text: string): string {
-  return text.replace(/[\\`*_[\]<>!|~#]/g, "\\$&").replace(/[\r\n]+/g, " ");
+  return text.replace(/[\\`*_[\]<>!|~#%=]/g, "\\$&").replace(/[\r\n]+/g, " ");
 }
 
 export class GitHubSource implements ContextSource {
