@@ -353,7 +353,7 @@ class DailyInboxView extends ItemView {
         list.createEl("li", { cls: "daily-inbox-group-label", text: item.groupLabel });
         lastGroupLabel = item.groupLabel;
       }
-      const entry = list.createEl("li", { cls: "daily-inbox-item" });
+      const entry = list.createEl("li", { cls: ["daily-inbox-item", `is-${item.type}`] });
       const label = item.title ?? item.id;
       const handler = this.resolveItemHandler(item);
       if (handler) {
