@@ -380,6 +380,110 @@ Decisions proposed here and open to review before implementation:
 Development-phase applications may use HTTP/loopback redirect URIs but are
 capped at 10 users, which is acceptable for per-user applications.
 
+## GitHub source
+
+Shows the user's development activity on the date (#29). GitHub is the
+authoritative store; Daily Inbox reads it through the REST API and keeps no
+copy. The events endpoint is not used because it keeps only 300 events from
+the past 30 days and could not serve earlier dates. The search endpoints are
+used instead.
+
+Findings from the official documentation:
+
+- `GET /search/commits` supports `author:` and `author-date:` /
+  `committer-date:` qualifiers and returns up to 100 results per page. It
+  searches only the default branch, so commits on unmerged branches are not
+  returned.
+- `GET /search/issues` covers issues and pull requests (`type:`, `author:`,
+  `created:`, `closed:`, `merged:`).
+- Search allows 30 requests per minute when authenticated and 1000 results per
+  query, and may answer with `incomplete_results: true` after a timeout.
+
+Findings from a real account (queries run with the `gh` CLI):
+
+- Date qualifiers accept an ISO 8601 date-time with a UTC offset
+  (`author-date:2026-10-09T00:00:00+09:00..2026-10-09T23:59:59+09:00`) and
+  treat the range as exact: the same instant range written in UTC (`Z`)
+  returned the same 6 commits. A bare date (`author-date:2026-10-09`) is
+  interpreted in UTC and returned a different set (20 commits, running into
+  the next local day), so it is not used.
+- Issue search results carry `created_at`, `closed_at` and, for pull requests,
+  `pull_request.merged_at`, so a merged pull request is told apart from a
+  closed one without a separate `merged:` query.
+- Issue search without `is:issue` or `is:pull-request` worked with the `gh`
+  session's token but was refused with a 422 ("Query must include 'is:issue'
+  or 'is:pull-request'") for the personal access token entered in the plugin.
+  Splitting by kind returned the same results (3 issues + 7 pull requests = 10
+  for the unsplit query) with the `gh` token. Why the two tokens differ is not
+  verified.
+- Commit results carry `repository.full_name` and `commit.author.date`.
+  Commits in private repositories are returned.
+- Not verified: the minimum token scopes for private repositories. A classic
+  token with `repo` worked for the `gh` session used above; fine-grained token
+  permissions are untested.
+
+Decisions:
+
+- **Forge seam.** GitHub's response shapes stay inside `src/sources/github/`;
+  the items handed to the view and actions are forge-neutral, so another forge
+  can be added later as a separate adapter. No second adapter is built now.
+- **Scope.** The user's own commits, and pull requests and issues the user
+  authored that were opened, merged or closed on the date. Closing or merging
+  is attributed to the author, not to whoever clicked the button. Other
+  people's activity, reviews and comments are out of scope until the Daily
+  Note shows a need.
+- **Commits are opt-in.** Commit search covers only default branches, so most
+  commits it returns are the contents of merged pull requests already listed.
+  A settings toggle, off by default, adds them for repositories where work is
+  pushed directly without pull requests.
+- **Authorization.** The user enters their GitHub username and a personal
+  access token in settings, held in plugin data like the other sources'
+  credentials. The source is unavailable until both are set, and a username
+  that is not a plausible GitHub login is treated as unset because it is
+  interpolated into the search query.
+- **Queries.** Up to five per refresh, run sequentially: commits by
+  `author-date:` when commits are included, and issues and pull requests (`is:issue` and `is:pull-request` separately)
+  by `created:` and by `closed:`. Results are paged up
+  to the 1000-result cap. A query for the whole day never needs more than a few
+  pages in practice.
+- **Date range.** The range is the local calendar day as offset date-times,
+  each end carrying the machine's offset at that instant (so a DST change
+  within the day is handled). Each event's own timestamp is then checked
+  against the same bounds, so an issue created yesterday and closed today
+  appears only as closed.
+- **Items.** Each commit, pull request or issue event becomes an `activity`
+  item with a pre-rendered one-line Markdown text payload for
+  `CopyActivityTextAction`, e.g. `09:30 Commit [owner/repo@abc1234](url)
+  message`. Items are grouped by repository through `groupLabel`, repositories
+  ordered by their first activity of the day and events chronological within
+  each.
+- **Close history.** Search exposes only an item's current `closed_at`. An
+  item closed on the date and reopened or closed again later is shown on the
+  later date only, and several closes of one item are not kept. Recovering the
+  history needs the issue events API (one request per item), which is not
+  adopted; revisit if this proves to matter in daily use.
+- **Result cap.** A query that would return more than the 1000 results search
+  allows fails with an `incomplete` error instead of showing a partial day.
+- **Collapse rule.** None: every event is listed. The view has no expand
+  mechanism, and hiding commits behind a count would make them uncopyable.
+  Grouping by repository is the only structure. If days with dozens of commits
+  prove unwieldy in use, collapsing is a view-level change to decide with real
+  data.
+- **Default-branch limit.** The commit search gap is shown as a note under the
+  section (`SourceSection.note`) and in the settings description, rather than
+  worked around with per-repository branch scans.
+- **Errors.** Authorization failure (401, 403), rate limit (429, or 403 with
+  `x-ratelimit-remaining: 0`, `retry-after` or a "rate limit" message in the
+  body, which covers secondary limits), a 422 naming an unsearchable user, any
+  other rejected query (422, shown with GitHub's own message), `incomplete_results`,
+  network/5xx and malformed responses (including unparsable timestamps and
+  repository URLs) are distinct `GitHubSourceError` kinds, contained to the
+  section. The rate-limit mappings come from the documentation and are not
+  observed; the 422 split was found from a real response.
+- **Cancellation.** The signal is checked before every request and after every
+  response, so date switches drop stale results as for the other sources.
+  `requestUrl` cannot abort the request itself.
+
 ## Actions
 
 v0.1 should minimize coupling with the existing S3 Image Uploader.
