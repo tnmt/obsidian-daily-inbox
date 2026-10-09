@@ -13,6 +13,8 @@ export class GitHubSourceError extends Error {
     public readonly kind: GitHubSourceErrorKind,
     message: string,
     public readonly cause?: unknown,
+    /** GitHub's own explanation from the error response body, when it gave one. */
+    public readonly detail?: string,
   ) {
     super(message);
     this.name = "GitHubSourceError";

@@ -153,8 +153,10 @@ function describeGitHubError(err: unknown): string {
     switch (err.kind) {
       case "auth-required":
         return "GitHub rejected the access token. Check it in Settings → Daily Inbox.";
-      case "invalid-user":
-        return "GitHub could not search the configured username. Check it in Settings → Daily Inbox.";
+      case "invalid-user": {
+        const base = "GitHub could not search the configured username. Check it in Settings → Daily Inbox.";
+        return err.detail ? `${base} GitHub said: ${err.detail}` : base;
+      }
       case "rate-limited":
         return "GitHub search rate limit reached. Try again in a minute.";
       case "incomplete":

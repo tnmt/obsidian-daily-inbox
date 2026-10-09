@@ -108,6 +108,27 @@ describe("search client", () => {
     expect(await kindOf(respond(200, page([], 0, { incomplete_results: true })))).toBe("incomplete");
   });
 
+  const errorOf = async (response: RequestUrlResponse) => {
+    try {
+      await searchCommits(vi.fn(async () => response), "t", "q", signal());
+    } catch (err) {
+      return err as GitHubSourceError;
+    }
+    throw new Error("expected a failure");
+  };
+
+  it("keeps GitHub's explanation of a 422", async () => {
+    const listed = await errorOf(
+      respond(422, {
+        message: "Validation Failed",
+        errors: [{ message: "The listed users cannot be searched.", resource: "Search", field: "q", code: "invalid" }],
+      }),
+    );
+    expect(listed.detail).toBe("The listed users cannot be searched.");
+    expect((await errorOf(respond(422, { message: "Validation Failed" }))).detail).toBe("Validation Failed");
+    expect((await errorOf(respond(422, "not json"))).detail).toBeUndefined();
+  });
+
   it("stops without a request when already cancelled", async () => {
     const http = vi.fn();
     const controller = new AbortController();

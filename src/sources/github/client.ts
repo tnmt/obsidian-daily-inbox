@@ -73,7 +73,12 @@ async function searchAll<T>(
       throw new GitHubSourceError("auth-required", `GitHub rejected the token (${response.status}).`);
     }
     if (response.status === 422) {
-      throw new GitHubSourceError("invalid-user", "GitHub could not search the configured user.");
+      throw new GitHubSourceError(
+        "invalid-user",
+        "GitHub could not search the configured user.",
+        undefined,
+        errorDetail(response),
+      );
     }
     if (response.status >= 400) {
       throw new GitHubSourceError("transient", `GitHub error (${response.status}).`);
@@ -95,6 +100,23 @@ async function searchAll<T>(
     if (body.items.length < PER_PAGE || results.length >= body.total_count) break;
   }
   return results;
+}
+
+// A 422 from search names the cause only in the body, e.g. a token that
+// cannot see the user, so that text is the actionable part for the user.
+function errorDetail(response: { json: unknown }): string | undefined {
+  let body: unknown;
+  try {
+    body = response.json;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(body)) return undefined;
+  const messages = Array.isArray(body.errors)
+    ? body.errors.flatMap((e) => (isRecord(e) && typeof e.message === "string" ? [e.message] : []))
+    : [];
+  if (messages.length > 0) return messages.join(" ");
+  return typeof body.message === "string" ? body.message : undefined;
 }
 
 function isRateLimited(headers: Record<string, string>): boolean {
