@@ -158,4 +158,14 @@ describe("GitHubSource", () => {
     const items = await source.getItems(context, new AbortController().signal);
     expect(items.map((i) => i.subtitle)).toEqual(["10:00 · Closed issue #1"]);
   });
+
+  it("reports only the current close time, so an item reopened after closing has no closed event", async () => {
+    // Search exposes the latest closed_at only; earlier closes are not recoverable without the issue events API.
+    const { source } = sourceFor({
+      commits: [],
+      created: [],
+      closed: [issue(3, "tnmt/a", "Reopened", "2026-10-01T10:00:00+09:00", "2026-10-10T10:00:00+09:00", null)],
+    });
+    expect(await source.getItems(context, new AbortController().signal)).toEqual([]);
+  });
 });

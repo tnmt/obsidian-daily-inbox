@@ -50,6 +50,21 @@ describe("search client", () => {
     expect(new URL(http.mock.calls[1][0].url).searchParams.get("page")).toBe("2");
   });
 
+  it("fails rather than silently dropping results beyond the 1000-result cap", async () => {
+    const full = () => respond(200, page(Array.from({ length: 100 }, (_, i) => commitItem(i)), 1001));
+    const http = vi.fn(async (_req: RequestUrlParam) => full());
+    await expect(searchCommits(http, "t", "q", signal())).rejects.toMatchObject({ kind: "incomplete" });
+    expect(http).toHaveBeenCalledTimes(10);
+  });
+
+  it("accepts exactly 1000 results", async () => {
+    const http = vi.fn(async (_req: RequestUrlParam) =>
+      respond(200, page(Array.from({ length: 100 }, (_, i) => commitItem(i)), 1000)),
+    );
+    expect(await searchCommits(http, "t", "q", signal())).toHaveLength(1000);
+    expect(http).toHaveBeenCalledTimes(10);
+  });
+
   it("maps pull request and issue results", async () => {
     const http = vi.fn(async () =>
       respond(

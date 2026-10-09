@@ -457,6 +457,13 @@ Decisions:
   message`. Items are grouped by repository through `groupLabel`, repositories
   ordered by their first activity of the day and events chronological within
   each.
+- **Close history.** Search exposes only an item's current `closed_at`. An
+  item closed on the date and reopened or closed again later is shown on the
+  later date only, and several closes of one item are not kept. Recovering the
+  history needs the issue events API (one request per item), which is not
+  adopted; revisit if this proves to matter in daily use.
+- **Result cap.** A query that would return more than the 1000 results search
+  allows fails with an `incomplete` error instead of showing a partial day.
 - **Collapse rule.** None: every event is listed. The view has no expand
   mechanism, and hiding commits behind a count would make them uncopyable.
   Grouping by repository is the only structure. If days with dozens of commits

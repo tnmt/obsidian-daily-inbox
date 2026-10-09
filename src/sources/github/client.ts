@@ -101,9 +101,10 @@ async function searchAll<T>(
       throw new GitHubSourceError("incomplete", "GitHub search timed out and returned partial results.");
     }
     results.push(...body.items.map(parseItem));
-    if (body.items.length < PER_PAGE || results.length >= body.total_count) break;
+    if (body.items.length < PER_PAGE || results.length >= body.total_count) return results;
   }
-  return results;
+  // `incomplete_results` reports timeouts only; the 1000-result cap is silent.
+  throw new GitHubSourceError("incomplete", "GitHub search has more results than it will return for one day.");
 }
 
 // A 422 from search names the cause only in the body, e.g. a token that
