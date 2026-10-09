@@ -366,11 +366,12 @@ Decisions proposed here and open to review before implementation:
   not persisted.
 - **Errors.** Authorization failure/expired refresh token, rate limit (601),
   network/5xx and malformed responses are distinct `WithingsSourceError`
-  kinds, contained to the section. Only 601, 401 and 293 are verified. For the
-  token endpoint, envelope statuses 500-599 are treated as Withings-side faults
-  (stored tokens kept); every other non-zero status clears the tokens and asks
-  for re-authorization. Whether Withings reports a revoked token inside the
-  500-599 range is unverified.
+  kinds, contained to the section. Observed against the real API: the token
+  endpoint answers an invalid code or refresh token with 503 (`Invalid
+  Params`). 601 as the rate limit comes from the documentation, and 401 and
+  293 as a rejected access token are assumed, not observed. For the token endpoint, 503 and every status outside 500-599 clear
+  the tokens and ask for re-authorization; other 500-599 statuses are treated
+  as Withings-side faults (stored tokens kept), which is unverified.
 - **Cancellation.** A token refresh is not tied to the requesting view's
   signal: Withings rotates the refresh token as soon as it handles the
   request, so the response must reach storage even if the view has moved on.

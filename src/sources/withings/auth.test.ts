@@ -92,6 +92,44 @@ describe("WithingsAuthManager refresh", () => {
     expect(saved).toEqual([undefined]);
   });
 
+  it.each([503])("treats status %i (invalid code or refresh token) as a rejection and clears the tokens", async (status) => {
+    const { persistence, saved } = memoryPersistence(stored(60_000));
+    const auth = new WithingsAuthManager(vi.fn(async (_: RequestUrlParam) => envelope(status)), credentials, persistence);
+    await expect(auth.getAccessToken(signal())).rejects.toMatchObject({ kind: "auth-required" });
+    expect(auth.isConnected()).toBe(false);
+    expect(saved).toEqual([undefined]);
+  });
+
+  it("treats other 5xx statuses as transient and keeps the tokens", async () => {
+    const { persistence } = memoryPersistence(stored(-1000));
+    const auth = new WithingsAuthManager(vi.fn(async (_: RequestUrlParam) => envelope(500)), credentials, persistence);
+    await expect(auth.getAccessToken(signal())).rejects.toMatchObject({ kind: "transient" });
+    expect(auth.isConnected()).toBe(true);
+  });
+
+  it("does not write a discarded unsaved token over a later connection", async () => {
+    const writes: Array<WithingsTokens | undefined> = [];
+    let failNext = true;
+    const persistence: WithingsAuthPersistence = {
+      load: () => stored(60_000),
+      save: async (tokens) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("disk full");
+        }
+        writes.push(tokens);
+      },
+    };
+    const responses = [tokenResponse({ refresh_token: "R2" }), envelope(503), tokenResponse({ refresh_token: "R9" })];
+    const http = vi.fn(async (_: RequestUrlParam) => responses.shift()!);
+    const auth = new WithingsAuthManager(http, credentials, persistence, async (o) => ({ port: o.port, code: Promise.resolve("CODE") }));
+    await expect(auth.getAccessToken(signal())).rejects.toMatchObject({ kind: "transient" });
+    await expect(auth.refreshAfterUnauthorized(signal())).rejects.toMatchObject({ kind: "auth-required" });
+    await auth.connect(() => undefined);
+    await auth.getAccessToken(signal());
+    expect(writes.map((t) => t?.refreshToken)).toEqual([undefined, "R9"]);
+  });
+
   it("keeps the tokens on a transient failure and falls back to the still-valid access token", async () => {
     const { persistence, saved } = memoryPersistence(stored(60_000));
     const http: HttpRequester = async () => {

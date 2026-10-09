@@ -104,7 +104,11 @@ export function startCallbackServer(options: CallbackServerOptions): Promise<Cal
     signal.addEventListener("abort", onAbort, { once: true });
     server.listen(options.port, "127.0.0.1", () => {
       listening = true;
-      if (done) return;
+      if (done) {
+        // Ended while the socket was still being bound.
+        server.close();
+        return;
+      }
       const address = server.address();
       resolveStarted({ port: typeof address === "object" && address ? address.port : options.port, code });
     });

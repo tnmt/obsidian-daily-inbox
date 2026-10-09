@@ -8,6 +8,7 @@ import { WithingsSourceError } from "./errors";
 const AUTHORIZE_URL = "https://account.withings.com/oauth2_user/authorize2";
 const TOKEN_URL = "https://wbsapi.withings.net/v2/oauth2";
 const SCOPE = "user.metrics";
+const INVALID_PARAMS_STATUS = 503;
 
 // The access token lasts 3 hours; refresh a little early rather than on a 401.
 const REFRESH_MARGIN_MS = 5 * 60_000;
@@ -137,6 +138,8 @@ export class WithingsAuthManager implements WithingsAuthClient {
         await this.persistence.save(this.tokens);
         throw new CancelledError();
       }
+      // Anything an earlier failed write left behind belongs to the old connection.
+      this.unsaved = undefined;
       this.tokens = next;
     } finally {
       if (this.pendingAuthorization === abort) this.pendingAuthorization = undefined;
@@ -256,6 +259,7 @@ export class WithingsAuthManager implements WithingsAuthClient {
       if (generation !== this.generation && !(err instanceof CancelledError)) throw new CancelledError();
       if (err instanceof WithingsSourceError && err.kind === "auth-required") {
         this.tokens = undefined;
+        this.unsaved = undefined;
         await this.persistence.save(undefined);
       }
       throw err;
@@ -281,9 +285,11 @@ export class WithingsAuthManager implements WithingsAuthClient {
       if (err.status === RATE_LIMIT_STATUS) {
         throw new WithingsSourceError("rate-limited", "Withings rate limit reached.", err);
       }
-      // A rejected code, secret or refresh token. 5xx-range statuses are
-      // Withings-side faults and leave the stored tokens alone.
-      if (err.status >= 500 && err.status < 600) {
+      // Withings answers an invalid or expired code and an invalid refresh
+      // token with 503 ("Invalid Params"), so that one is a rejection. Other
+      // 5xx-range statuses are treated as Withings-side faults and leave the
+      // stored tokens alone.
+      if (err.status >= 500 && err.status < 600 && err.status !== INVALID_PARAMS_STATUS) {
         throw new WithingsSourceError("transient", "Withings is temporarily unavailable.", err);
       }
       throw new WithingsSourceError("auth-required", "Withings rejected the credentials or token.", err);
