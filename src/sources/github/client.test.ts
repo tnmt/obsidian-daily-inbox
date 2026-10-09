@@ -100,11 +100,18 @@ describe("search client", () => {
     expect(await kindOf(respond(403, {}, { "X-RateLimit-Remaining": "0" }))).toBe("rate-limited");
     expect(await kindOf(respond(403, {}, { "Retry-After": "30" }))).toBe("rate-limited");
     expect(await kindOf(respond(429, {}))).toBe("rate-limited");
-    expect(await kindOf(respond(422, {}))).toBe("invalid-user");
+    expect(await kindOf(respond(403, { message: "You have exceeded a secondary rate limit." }, { "X-RateLimit-Remaining": "10" }))).toBe("rate-limited");
+    expect(await kindOf(respond(422, {}))).toBe("invalid-query");
+    expect(
+      await kindOf(respond(422, { message: "Validation Failed", errors: [{ message: "The listed users cannot be searched." }] })),
+    ).toBe("invalid-user");
     expect(await kindOf(respond(503, {}))).toBe("transient");
     expect(await kindOf(new Error("offline"))).toBe("transient");
     expect(await kindOf(respond(200, { nope: true }))).toBe("malformed");
     expect(await kindOf(respond(200, page([{ sha: 1 }])))).toBe("malformed");
+    expect(await kindOf(respond(200, page([{ ...commitItem(1), commit: { message: "m", author: { date: "invalid" } } }])))).toBe(
+      "malformed",
+    );
     expect(await kindOf(respond(200, page([], 0, { incomplete_results: true })))).toBe("incomplete");
   });
 
@@ -127,6 +134,46 @@ describe("search client", () => {
     expect(listed.detail).toBe("The listed users cannot be searched.");
     expect((await errorOf(respond(422, { message: "Validation Failed" }))).detail).toBe("Validation Failed");
     expect((await errorOf(respond(422, "not json"))).detail).toBeUndefined();
+  });
+
+  it("reports a malformed issue timestamp or repository url as malformed", async () => {
+    const issueBody = (over: object) =>
+      page([
+        {
+          html_url: "https://github.com/o/r/issues/1",
+          number: 1,
+          title: "t",
+          repository_url: "https://api.github.com/repos/o/r",
+          created_at: "2026-10-09T01:00:00Z",
+          closed_at: null,
+          pull_request: null,
+          ...over,
+        },
+      ]);
+    for (const over of [{ created_at: "invalid" }, { closed_at: "invalid" }, { repository_url: "not-a-url" }]) {
+      const http = vi.fn(async (_req: RequestUrlParam) => respond(200, issueBody(over)));
+      await expect(searchIssues(http, "t", "q", signal())).rejects.toMatchObject({ kind: "malformed" });
+    }
+  });
+
+  it("drops a response that arrives after cancellation and sends no further request", async () => {
+    const controller = new AbortController();
+    const first = Array.from({ length: 100 }, (_, i) => commitItem(i));
+    const http = vi.fn(async (_req: RequestUrlParam) => {
+      controller.abort();
+      return respond(200, page(first, 200));
+    });
+    await expect(searchCommits(http, "t", "q", controller.signal)).rejects.toBeInstanceOf(CancelledError);
+    expect(http).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports cancellation, not a network error, when the request fails after cancellation", async () => {
+    const controller = new AbortController();
+    const http = vi.fn(async (_req: RequestUrlParam): Promise<RequestUrlResponse> => {
+      controller.abort();
+      throw new Error("offline");
+    });
+    await expect(searchCommits(http, "t", "q", controller.signal)).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("stops without a request when already cancelled", async () => {

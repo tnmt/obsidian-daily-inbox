@@ -466,10 +466,13 @@ Decisions:
   section (`SourceSection.note`) and in the settings description, rather than
   worked around with per-repository branch scans.
 - **Errors.** Authorization failure (401, 403), rate limit (429, or 403 with
-  `x-ratelimit-remaining: 0` or `retry-after`), an unsearchable username (422),
-  `incomplete_results`, network/5xx and malformed responses are distinct
-  `GitHubSourceError` kinds, contained to the section. The rate-limit and 422
-  mappings come from the documentation and are not observed.
+  `x-ratelimit-remaining: 0`, `retry-after` or a "rate limit" message in the
+  body, which covers secondary limits), a 422 naming an unsearchable user, any
+  other rejected query (422, shown with GitHub's own message), `incomplete_results`,
+  network/5xx and malformed responses (including unparsable timestamps and
+  repository URLs) are distinct `GitHubSourceError` kinds, contained to the
+  section. The rate-limit mappings come from the documentation and are not
+  observed; the 422 split was found from a real response.
 - **Cancellation.** The signal is checked before every request and after every
   response, so date switches drop stale results as for the other sources.
   `requestUrl` cannot abort the request itself.

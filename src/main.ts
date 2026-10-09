@@ -157,6 +157,10 @@ function describeGitHubError(err: unknown): string {
         const base = "GitHub could not search the configured username. Check it in Settings → Daily Inbox.";
         return err.detail ? `${base} GitHub said: ${err.detail}` : base;
       }
+      case "invalid-query": {
+        const base = "GitHub rejected the search query.";
+        return err.detail ? `${base} GitHub said: ${err.detail}` : base;
+      }
       case "rate-limited":
         return "GitHub search rate limit reached. Try again in a minute.";
       case "incomplete":

@@ -1,6 +1,7 @@
 export type GitHubSourceErrorKind =
   | "auth-required"
   | "invalid-user"
+  | "invalid-query"
   | "rate-limited"
   | "incomplete"
   | "transient"

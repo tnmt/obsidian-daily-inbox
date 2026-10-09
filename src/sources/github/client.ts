@@ -66,19 +66,23 @@ async function searchAll<T>(
     }
     throwIfAborted(signal);
 
-    if (response.status === 429 || (response.status === 403 && isRateLimited(response.headers))) {
+    if (
+      response.status === 429 ||
+      (response.status === 403 && (isRateLimited(response.headers) || /rate limit/i.test(errorDetail(response) ?? "")))
+    ) {
       throw new GitHubSourceError("rate-limited", "GitHub search rate limit reached.");
     }
     if (response.status === 401 || response.status === 403) {
       throw new GitHubSourceError("auth-required", `GitHub rejected the token (${response.status}).`);
     }
     if (response.status === 422) {
-      throw new GitHubSourceError(
-        "invalid-user",
-        "GitHub could not search the configured user.",
-        undefined,
-        errorDetail(response),
-      );
+      // 422 is GitHub's answer to any invalid query, not only an unsearchable
+      // user, so only the documented user message is reported as that.
+      const detail = errorDetail(response);
+      if (detail !== undefined && /cannot be searched/i.test(detail)) {
+        throw new GitHubSourceError("invalid-user", "GitHub could not search the configured user.", undefined, detail);
+      }
+      throw new GitHubSourceError("invalid-query", "GitHub rejected the search query.", undefined, detail);
     }
     if (response.status >= 400) {
       throw new GitHubSourceError("transient", `GitHub error (${response.status}).`);
@@ -132,8 +136,18 @@ function str(value: unknown, what: string): string {
   return value;
 }
 
-function optionalStr(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+// Events are placed on a date by their timestamp, so an unparsable one would
+// be silently dropped as "outside the day" rather than reported.
+function timestamp(value: unknown, what: string): string {
+  const text = str(value, what);
+  if (Number.isNaN(Date.parse(text))) {
+    throw new GitHubSourceError("malformed", `Unexpected ${what} in GitHub response.`);
+  }
+  return text;
+}
+
+function optionalTimestamp(value: unknown, what: string): string | undefined {
+  return value === null || value === undefined ? undefined : timestamp(value, what);
 }
 
 export function parseCommit(raw: unknown): CommitResult {
@@ -145,7 +159,7 @@ export function parseCommit(raw: unknown): CommitResult {
     url: str(raw.html_url, "commit url"),
     repository: str(raw.repository.full_name, "repository name"),
     message: str(raw.commit.message, "commit message"),
-    authoredAt: str(raw.commit.author.date, "commit date"),
+    authoredAt: timestamp(raw.commit.author.date, "commit date"),
   };
 }
 
@@ -155,8 +169,13 @@ export function parseIssue(raw: unknown): IssueResult {
   if (!isRecord(raw) || typeof raw.number !== "number") {
     throw new GitHubSourceError("malformed", "Unexpected issue in GitHub response.");
   }
-  const repoUrl = new URL(str(raw.repository_url, "repository url"));
-  const repoPath = repoUrl.pathname;
+  let repoPath: string;
+  try {
+    repoPath = new URL(str(raw.repository_url, "repository url")).pathname;
+  } catch (err) {
+    if (err instanceof GitHubSourceError) throw err;
+    throw new GitHubSourceError("malformed", "Unexpected repository url in GitHub response.", err);
+  }
   if (!repoPath.startsWith(REPOS_PREFIX)) {
     throw new GitHubSourceError("malformed", "Unexpected repository url in GitHub response.");
   }
@@ -167,9 +186,9 @@ export function parseIssue(raw: unknown): IssueResult {
     repository: repoPath.slice(REPOS_PREFIX.length),
     title: str(raw.title, "issue title"),
     isPullRequest: pullRequest !== undefined,
-    createdAt: str(raw.created_at, "created_at"),
-    closedAt: optionalStr(raw.closed_at),
-    mergedAt: optionalStr(pullRequest?.merged_at),
+    createdAt: timestamp(raw.created_at, "created_at"),
+    closedAt: optionalTimestamp(raw.closed_at, "closed_at"),
+    mergedAt: optionalTimestamp(pullRequest?.merged_at, "merged_at"),
   };
 }
 
