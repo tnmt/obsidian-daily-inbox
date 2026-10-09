@@ -3,11 +3,14 @@ export interface GitHubSettings {
   username: string;
   /** Personal access token used for the search API. */
   token: string;
+  /** Commits mostly repeat the merged pull requests they belong to, so they are opt-in. */
+  includeCommits: boolean;
 }
 
 export const DEFAULT_GITHUB_SETTINGS: GitHubSettings = {
   username: "",
   token: "",
+  includeCommits: false,
 };
 
 // The login is interpolated into a search query, so anything that could add a

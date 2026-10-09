@@ -410,6 +410,12 @@ Findings from a real account (queries run with the `gh` CLI):
 - Issue search results carry `created_at`, `closed_at` and, for pull requests,
   `pull_request.merged_at`, so a merged pull request is told apart from a
   closed one without a separate `merged:` query.
+- Issue search without `is:issue` or `is:pull-request` worked with the `gh`
+  session's token but was refused with a 422 ("Query must include 'is:issue'
+  or 'is:pull-request'") for the personal access token entered in the plugin.
+  Splitting by kind returned the same results (3 issues + 7 pull requests = 10
+  for the unsplit query) with the `gh` token. Why the two tokens differ is not
+  verified.
 - Commit results carry `repository.full_name` and `commit.author.date`.
   Commits in private repositories are returned.
 - Not verified: the minimum token scopes for private repositories. A classic
@@ -426,13 +432,18 @@ Decisions:
   is attributed to the author, not to whoever clicked the button. Other
   people's activity, reviews and comments are out of scope until the Daily
   Note shows a need.
+- **Commits are opt-in.** Commit search covers only default branches, so most
+  commits it returns are the contents of merged pull requests already listed.
+  A settings toggle, off by default, adds them for repositories where work is
+  pushed directly without pull requests.
 - **Authorization.** The user enters their GitHub username and a personal
   access token in settings, held in plugin data like the other sources'
   credentials. The source is unavailable until both are set, and a username
   that is not a plausible GitHub login is treated as unset because it is
   interpolated into the search query.
-- **Queries.** Three per refresh, run sequentially: commits by `author-date:`,
-  and issues/pull requests by `created:` and by `closed:`. Results are paged up
+- **Queries.** Up to five per refresh, run sequentially: commits by
+  `author-date:` when commits are included, and issues and pull requests (`is:issue` and `is:pull-request` separately)
+  by `created:` and by `closed:`. Results are paged up
   to the 1000-result cap. A query for the whole day never needs more than a few
   pages in practice.
 - **Date range.** The range is the local calendar day as offset date-times,

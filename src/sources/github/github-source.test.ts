@@ -6,7 +6,7 @@ import { GitHubSource } from "./github-source";
 import type { GitHubSettings } from "./settings";
 
 const context: DailyContext = { date: localDate("2026-10-09") };
-const settings: GitHubSettings = { username: "tnmt", token: "t" };
+const settings: GitHubSettings = { username: "tnmt", token: "t", includeCommits: true };
 
 const commit = (sha: string, repo: string, at: string, message: string) => ({
   sha,
@@ -39,7 +39,13 @@ function sourceFor(
   const http = vi.fn(async ({ url }: { url: string }): Promise<RequestUrlResponse> => {
     const u = new URL(url);
     const q = u.searchParams.get("q") ?? "";
-    const items = u.pathname.endsWith("/commits") ? answers.commits : q.includes(" created:") ? answers.created : answers.closed;
+    const all = u.pathname.endsWith("/commits") ? answers.commits : q.includes(" created:") ? answers.created : answers.closed;
+    const isPullRequest = (item: unknown) => (item as { pull_request?: unknown }).pull_request != null;
+    const items = q.includes("is:pull-request")
+      ? all.filter(isPullRequest)
+      : q.includes("is:issue")
+        ? all.filter((item) => !isPullRequest(item))
+        : all;
     const body = { total_count: items.length, incomplete_results: false, items };
     return { status: 200, headers: {}, arrayBuffer: new ArrayBuffer(0), json: body, text: JSON.stringify(body) };
   });
@@ -57,10 +63,10 @@ describe("GitHubSource", () => {
   });
 
   it("is unavailable without a valid username and a token", () => {
-    expect(sourceFor({ commits: [], created: [], closed: [] }, { username: "", token: "t" }).source.isAvailable()).toBe(false);
-    expect(sourceFor({ commits: [], created: [], closed: [] }, { username: "tnmt", token: " " }).source.isAvailable()).toBe(false);
+    expect(sourceFor({ commits: [], created: [], closed: [] }, { username: "", token: "t", includeCommits: true }).source.isAvailable()).toBe(false);
+    expect(sourceFor({ commits: [], created: [], closed: [] }, { username: "tnmt", token: " ", includeCommits: true }).source.isAvailable()).toBe(false);
     expect(
-      sourceFor({ commits: [], created: [], closed: [] }, { username: "x created:2020", token: "t" }).source.isAvailable(),
+      sourceFor({ commits: [], created: [], closed: [] }, { username: "x created:2020", token: "t", includeCommits: true }).source.isAvailable(),
     ).toBe(false);
     expect(sourceFor({ commits: [], created: [], closed: [] }).source.isAvailable()).toBe(true);
   });
@@ -72,9 +78,21 @@ describe("GitHubSource", () => {
     const range = "2026-10-09T00:00:00+09:00..2026-10-09T23:59:59+09:00";
     expect(queries).toEqual([
       `author:tnmt author-date:${range}`,
-      `author:tnmt created:${range}`,
-      `author:tnmt closed:${range}`,
+      `author:tnmt is:issue created:${range}`,
+      `author:tnmt is:pull-request created:${range}`,
+      `author:tnmt is:issue closed:${range}`,
+      `author:tnmt is:pull-request closed:${range}`,
     ]);
+  });
+
+  it("skips the commit search unless commits are included", async () => {
+    const { http, source } = sourceFor(
+      { commits: [commit("abc1234def", "tnmt/a", "2026-10-09T09:00:00+09:00", "Work")], created: [], closed: [] },
+      { ...settings, includeCommits: false },
+    );
+    const items = await source.getItems(context, new AbortController().signal);
+    expect(items).toEqual([]);
+    expect(http.mock.calls.some(([req]) => new URL(req.url).pathname.endsWith("/commits"))).toBe(false);
   });
 
   it("groups by repository, ordered by first activity, chronological within a group", async () => {

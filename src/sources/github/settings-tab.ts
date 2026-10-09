@@ -18,7 +18,7 @@ export function renderGitHubSettings(
   containerEl.createEl("p", {
     cls: "setting-item-description",
     text:
-      "Shows your commits, pull requests and issues on the date, read through GitHub's search API. " +
+      "Shows your pull requests and issues on the date, and optionally your commits, read through GitHub's search API. " +
       "Commit search covers only each repository's default branch. The token is stored in this " +
       "plugin's data.json inside the vault, in plain text; keep data.json out of anything the vault " +
       "is shared or backed up to. A read-only token is enough; private repositories need access to them.",
@@ -27,7 +27,7 @@ export function renderGitHubSettings(
   const field = (
     name: string,
     desc: string,
-    key: keyof GitHubSettings,
+    key: "username" | "token",
     configure: (input: HTMLInputElement) => void,
   ) =>
     new Setting(containerEl)
@@ -53,4 +53,15 @@ export function renderGitHubSettings(
   field("Access token", "Personal access token for the search API.", "token", (input) => {
     input.type = "password";
   });
+
+  new Setting(containerEl)
+    .setName("Include commits")
+    .setDesc("Also list commits. Commits merged through a pull request appear alongside that pull request.")
+    .addToggle((toggle) =>
+      toggle.setValue(host.settings.includeCommits).onChange(async (value) => {
+        host.settings.includeCommits = value;
+        await host.saveSettings();
+        rerender();
+      }),
+    );
 }

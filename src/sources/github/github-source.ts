@@ -37,16 +37,26 @@ export class GitHubSource implements ContextSource {
   }
 
   async getItems(context: DailyContext, signal: AbortSignal): Promise<ContextItem[]> {
-    const { username, token } = this.getSettings();
+    const { username, token, includeCommits } = this.getSettings();
     const user = username.trim();
     const range = searchDateRange(context.date);
     const bounds = localDayBounds(context.date);
 
-    // Sequential rather than parallel: three requests are well inside the
+    // Sequential rather than parallel: at most five requests are well inside the
     // 30/min search limit, and bursts risk GitHub's secondary rate limit.
-    const commits = await searchCommits(this.http, token, `author:${user} author-date:${range}`, signal);
-    const created = await searchIssues(this.http, token, `author:${user} created:${range}`, signal);
-    const closed = await searchIssues(this.http, token, `author:${user} closed:${range}`, signal);
+    // Issue search is split by kind because some tokens are refused with a 422
+    // ("Query must include 'is:issue' or 'is:pull-request'") otherwise.
+    const commits = includeCommits
+      ? await searchCommits(this.http, token, `author:${user} author-date:${range}`, signal)
+      : [];
+    const created = [];
+    const closed = [];
+    for (const kind of ["is:issue", "is:pull-request"]) {
+      created.push(...(await searchIssues(this.http, token, `author:${user} ${kind} created:${range}`, signal)));
+    }
+    for (const kind of ["is:issue", "is:pull-request"]) {
+      closed.push(...(await searchIssues(this.http, token, `author:${user} ${kind} closed:${range}`, signal)));
+    }
 
     const events = new Map<string, ActivityEvent>();
     const add = (event: ActivityEvent) => events.set(event.id, event);
