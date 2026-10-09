@@ -380,6 +380,55 @@ Decisions proposed here and open to review before implementation:
 Development-phase applications may use HTTP/loopback redirect URIs but are
 capped at 10 users, which is acceptable for per-user applications.
 
+## GitHub source
+
+Shows the user's development activity on the date (#29). GitHub is the
+authoritative store; Daily Inbox reads it through the REST API and keeps no
+copy. The events endpoint is not used because it keeps only 300 events from
+the past 30 days and could not serve earlier dates. The search endpoints are
+used instead.
+
+Findings from the official documentation (not yet exercised against a real
+account):
+
+- `GET /search/commits` supports `author:` and `author-date:` /
+  `committer-date:` qualifiers and returns up to 100 results per page. It
+  searches only the default branch, so commits on unmerged branches are not
+  returned.
+- `GET /search/issues` covers issues and pull requests (`type:`, `author:`,
+  `created:`, `closed:`, `merged:`).
+- Search allows 30 requests per minute when authenticated and 1000 results per
+  query, and may answer with `incomplete_results: true` after a timeout.
+
+Decisions proposed here and open to review before implementation:
+
+- **Forge seam.** GitHub's response shapes stay inside `src/sources/github/`;
+  the items handed to the view and actions are forge-neutral, so another forge
+  can be added later as a separate adapter. No second adapter is built now.
+- **Scope.** The user's own commits, pull requests opened, merged or closed,
+  and issues opened or closed. Other people's activity, reviews and comments
+  are out of scope until the Daily Note shows a need.
+- **Authorization.** The user enters their GitHub username and a personal
+  access token in settings, held in plugin data like the other sources'
+  credentials. The source is unavailable until both are set. The token scopes
+  needed for private repositories are to be verified.
+- **Items.** Each commit, pull request or issue event becomes an `activity`
+  item with a pre-rendered one-line text payload for `CopyActivityTextAction`,
+  grouped by repository through `groupLabel`. Because commits can number in
+  the dozens per day, the collapse rule (for example a count with expansion)
+  is decided together with the first implementation.
+- **Date range.** The local calendar day must be expressed in a form the search
+  qualifiers interpret correctly. Whether they accept an ISO 8601 date-time
+  with a UTC offset is unverified; if they do not, the range is widened by a
+  day on each side and results are filtered by their timestamp's local date.
+- **Default-branch limit.** The commit search gap is documented in the source's
+  section hint rather than worked around with per-repository branch scans.
+- **Errors.** Authorization failure, rate limit, `incomplete_results`,
+  network/5xx and malformed responses are distinct `GitHubSourceError` kinds,
+  contained to the section.
+- **Cancellation.** Date switches cancel in-flight requests through the
+  `AbortSignal`, as for the other sources.
+
 ## Actions
 
 v0.1 should minimize coupling with the existing S3 Image Uploader.
