@@ -6,6 +6,8 @@ import type { ContextItem, ContextSource, DailyContext } from "./domain";
 export interface SourceSection {
   readonly source: ContextSource;
   readonly emptyMessage: string;
+  /** Caveat shown under the section whenever it has loaded, e.g. a known gap in what the source can see. */
+  readonly note?: string;
   describeUnavailable(): string;
   describeError(err: unknown): string;
 }

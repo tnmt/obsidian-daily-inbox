@@ -122,7 +122,7 @@ regexes = [
   '''^(?:localhost|127\.0\.0\.1|x)$''',
   '''(?i)^(?:api|content|www)\.dropboxapi\.com$|^(?:www\.)?dropbox\.com$''',
   '''(?i)^(?:wbsapi|account|developer)\.withings\.(?:net|com)$''',
-  '''(?i)^(?:www\.)?github\.com$|^raw\.githubusercontent\.com$''',
+  '''(?i)^(?:www\.)?github\.com$|^api\.github\.com$|^raw\.githubusercontent\.com$''',
   '''(?i)^(?:docs\.)?obsidian\.md$''',
   '''(?i)^(?:registry\.npmjs\.org|www\.npmjs\.com|claude\.com)$''',
 ]

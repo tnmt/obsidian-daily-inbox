@@ -388,8 +388,7 @@ copy. The events endpoint is not used because it keeps only 300 events from
 the past 30 days and could not serve earlier dates. The search endpoints are
 used instead.
 
-Findings from the official documentation (not yet exercised against a real
-account):
+Findings from the official documentation:
 
 - `GET /search/commits` supports `author:` and `author-date:` /
   `committer-date:` qualifiers and returns up to 100 results per page. It
@@ -400,34 +399,69 @@ account):
 - Search allows 30 requests per minute when authenticated and 1000 results per
   query, and may answer with `incomplete_results: true` after a timeout.
 
-Decisions proposed here and open to review before implementation:
+Findings from a real account (queries run with the `gh` CLI):
+
+- Date qualifiers accept an ISO 8601 date-time with a UTC offset
+  (`author-date:2026-10-09T00:00:00+09:00..2026-10-09T23:59:59+09:00`) and
+  treat the range as exact: the same instant range written in UTC (`Z`)
+  returned the same 6 commits. A bare date (`author-date:2026-10-09`) is
+  interpreted in UTC and returned a different set (20 commits, running into
+  the next local day), so it is not used.
+- Issue search results carry `created_at`, `closed_at` and, for pull requests,
+  `pull_request.merged_at`, so a merged pull request is told apart from a
+  closed one without a separate `merged:` query.
+- Commit results carry `repository.full_name` and `commit.author.date`.
+  Commits in private repositories are returned.
+- Not verified: the minimum token scopes for private repositories. A classic
+  token with `repo` worked for the `gh` session used above; fine-grained token
+  permissions are untested.
+
+Decisions:
 
 - **Forge seam.** GitHub's response shapes stay inside `src/sources/github/`;
   the items handed to the view and actions are forge-neutral, so another forge
   can be added later as a separate adapter. No second adapter is built now.
-- **Scope.** The user's own commits, pull requests opened, merged or closed,
-  and issues opened or closed. Other people's activity, reviews and comments
-  are out of scope until the Daily Note shows a need.
+- **Scope.** The user's own commits, and pull requests and issues the user
+  authored that were opened, merged or closed on the date. Closing or merging
+  is attributed to the author, not to whoever clicked the button. Other
+  people's activity, reviews and comments are out of scope until the Daily
+  Note shows a need.
 - **Authorization.** The user enters their GitHub username and a personal
   access token in settings, held in plugin data like the other sources'
-  credentials. The source is unavailable until both are set. The token scopes
-  needed for private repositories are to be verified.
+  credentials. The source is unavailable until both are set, and a username
+  that is not a plausible GitHub login is treated as unset because it is
+  interpolated into the search query.
+- **Queries.** Three per refresh, run sequentially: commits by `author-date:`,
+  and issues/pull requests by `created:` and by `closed:`. Results are paged up
+  to the 1000-result cap. A query for the whole day never needs more than a few
+  pages in practice.
+- **Date range.** The range is the local calendar day as offset date-times,
+  each end carrying the machine's offset at that instant (so a DST change
+  within the day is handled). Each event's own timestamp is then checked
+  against the same bounds, so an issue created yesterday and closed today
+  appears only as closed.
 - **Items.** Each commit, pull request or issue event becomes an `activity`
-  item with a pre-rendered one-line text payload for `CopyActivityTextAction`,
-  grouped by repository through `groupLabel`. Because commits can number in
-  the dozens per day, the collapse rule (for example a count with expansion)
-  is decided together with the first implementation.
-- **Date range.** The local calendar day must be expressed in a form the search
-  qualifiers interpret correctly. Whether they accept an ISO 8601 date-time
-  with a UTC offset is unverified; if they do not, the range is widened by a
-  day on each side and results are filtered by their timestamp's local date.
-- **Default-branch limit.** The commit search gap is documented in the source's
-  section hint rather than worked around with per-repository branch scans.
-- **Errors.** Authorization failure, rate limit, `incomplete_results`,
-  network/5xx and malformed responses are distinct `GitHubSourceError` kinds,
-  contained to the section.
-- **Cancellation.** Date switches cancel in-flight requests through the
-  `AbortSignal`, as for the other sources.
+  item with a pre-rendered one-line Markdown text payload for
+  `CopyActivityTextAction`, e.g. `09:30 Commit [owner/repo@abc1234](url)
+  message`. Items are grouped by repository through `groupLabel`, repositories
+  ordered by their first activity of the day and events chronological within
+  each.
+- **Collapse rule.** None: every event is listed. The view has no expand
+  mechanism, and hiding commits behind a count would make them uncopyable.
+  Grouping by repository is the only structure. If days with dozens of commits
+  prove unwieldy in use, collapsing is a view-level change to decide with real
+  data.
+- **Default-branch limit.** The commit search gap is shown as a note under the
+  section (`SourceSection.note`) and in the settings description, rather than
+  worked around with per-repository branch scans.
+- **Errors.** Authorization failure (401, 403), rate limit (429, or 403 with
+  `x-ratelimit-remaining: 0` or `retry-after`), an unsearchable username (422),
+  `incomplete_results`, network/5xx and malformed responses are distinct
+  `GitHubSourceError` kinds, contained to the section. The rate-limit and 422
+  mappings come from the documentation and are not observed.
+- **Cancellation.** The signal is checked before every request and after every
+  response, so date switches drop stale results as for the other sources.
+  `requestUrl` cannot abort the request itself.
 
 ## Actions
 
