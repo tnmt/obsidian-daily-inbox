@@ -65,6 +65,14 @@ import { DEFAULT_LOCATION_SETTINGS } from "./sources/location/settings";
 import type { LocationSettings } from "./sources/location/settings";
 import { renderLocationSettings } from "./sources/location/settings-tab";
 import type { LocationSettingsHost } from "./sources/location/settings-tab";
+import { WithingsAuthManager } from "./sources/withings/auth";
+import type { WithingsAuthPersistence, WithingsTokens } from "./sources/withings/auth";
+import { WithingsSourceError } from "./sources/withings/errors";
+import { DEFAULT_WITHINGS_SETTINGS } from "./sources/withings/settings";
+import type { WithingsSettings } from "./sources/withings/settings";
+import { renderWithingsSettings } from "./sources/withings/settings-tab";
+import type { WithingsSettingsHost } from "./sources/withings/settings-tab";
+import { WithingsSource } from "./sources/withings/withings-source";
 
 export * from "./domain";
 
@@ -76,6 +84,8 @@ interface DailyInboxPluginData {
   browserHistory: BrowserHistorySettings;
   onThisDay: OnThisDaySettings;
   location: LocationSettings;
+  withings: WithingsSettings;
+  withingsTokens?: WithingsTokens;
 }
 
 function describeDropboxError(err: unknown): string {
@@ -129,6 +139,22 @@ function describeLocationError(err: unknown): string {
     }
   }
   return "Unexpected error while querying the location server.";
+}
+
+function describeWithingsError(err: unknown): string {
+  if (err instanceof WithingsSourceError) {
+    switch (err.kind) {
+      case "auth-required":
+        return "Withings re-authentication is required. Reconnect it in Settings → Daily Inbox.";
+      case "rate-limited":
+        return "Withings allows one request per 10 minutes. Try again later.";
+      case "transient":
+        return "Could not reach Withings. Try refreshing.";
+      case "malformed":
+        return "Withings returned unexpected data.";
+    }
+  }
+  return "Unexpected error while querying Withings.";
 }
 
 function describeCopyActivityTextError(err: unknown): string {
@@ -479,6 +505,14 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
     };
   }
 
+  private get withingsHost(): WithingsSettingsHost {
+    return {
+      settings: this.plugin.data.withings,
+      auth: this.plugin.withingsAuth,
+      saveSettings: () => this.plugin.savePluginData(),
+    };
+  }
+
   private get locationHost(): LocationSettingsHost {
     return {
       settings: this.plugin.data.location,
@@ -493,6 +527,10 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
       this.display();
     });
     renderLocationSettings(this.containerEl, this.locationHost, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
+    renderWithingsSettings(this.containerEl, this.withingsHost, () => {
       this.plugin.refreshAllViews();
       this.display();
     });
@@ -514,8 +552,11 @@ export default class DailyInboxPlugin extends Plugin {
     browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS },
     onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS },
     location: { ...DEFAULT_LOCATION_SETTINGS },
+    withings: { ...DEFAULT_WITHINGS_SETTINGS },
   };
   dropboxAuth!: DropboxAuthManager;
+  withingsAuth!: WithingsAuthManager;
+  withingsSource!: WithingsSource;
   dropboxSource!: DropboxSource;
   originalImageCache!: SingleOriginalImageCache;
   copyImageAction!: CopyImageToClipboardAction;
@@ -533,6 +574,8 @@ export default class DailyInboxPlugin extends Plugin {
       browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
       onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS, ...loaded?.onThisDay },
       location: { ...DEFAULT_LOCATION_SETTINGS, ...loaded?.location },
+      withings: { ...DEFAULT_WITHINGS_SETTINGS, ...loaded?.withings },
+      withingsTokens: loaded?.withingsTokens,
     };
 
     const persistence: DropboxAuthPersistence = {
@@ -544,6 +587,15 @@ export default class DailyInboxPlugin extends Plugin {
     };
     this.dropboxAuth = new DropboxAuthManager(requestUrl, () => this.data.dropbox.clientId, persistence);
     this.dropboxSource = new DropboxSource(requestUrl, this.dropboxAuth, () => this.data.dropbox.folderPaths);
+    const withingsPersistence: WithingsAuthPersistence = {
+      load: () => this.data.withingsTokens,
+      save: async (tokens) => {
+        this.data.withingsTokens = tokens;
+        await this.savePluginData();
+      },
+    };
+    this.withingsAuth = new WithingsAuthManager(requestUrl, () => this.data.withings, withingsPersistence);
+    this.withingsSource = new WithingsSource(requestUrl, this.withingsAuth);
     this.historyDbRuntime = createNodeHistoryDbRuntime();
     this.rebuildSourceSections();
 
@@ -604,6 +656,7 @@ export default class DailyInboxPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
+    this.withingsAuth.cancelAuthorization();
     this.app.workspace.detachLeavesOfType(DAILY_INBOX_VIEW_TYPE);
   }
 
@@ -644,6 +697,12 @@ export default class DailyInboxPlugin extends Plugin {
         describeUnavailable: () =>
           "Location is not configured. Set the server URL and read token in Settings → Daily Inbox.",
         describeError: describeLocationError,
+      },
+      {
+        source: this.withingsSource,
+        emptyMessage: "No measurements for this date.",
+        describeUnavailable: () => "Withings is not connected. Connect it in Settings → Daily Inbox.",
+        describeError: describeWithingsError,
       },
       {
         source: new OnThisDaySource(

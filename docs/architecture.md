@@ -339,9 +339,14 @@ Decisions proposed here and open to review before implementation:
   would need Withings' production review, which is not assumed. The plugin
   starts a loopback HTTP listener on `127.0.0.1` (fixed port, registered as the
   redirect URI) only while an authorization is pending, exchanges the code
-  immediately, and closes the listener. `obsidian://` as a redirect is
-  untested and not relied on. Whether the token endpoint accepts PKCE instead
-  of a client secret is unverified.
+  immediately, and closes the listener. The `requesttoken` documentation lists
+  `client_id`, `code`, `grant_type`, `redirect_uri` and a secret-derived
+  `signature` or `client_secret`, and no PKCE parameters, so the Client Secret
+  is required and PKCE is not used. Withings documents no custom-scheme
+  redirect, so `obsidian://` is not used. For production applications it
+  documents https-only callbacks without IPs or localhost; the loopback
+  redirect relies on the development-environment exception, which caps the
+  application at 10 users.
 - **Token storage.** Tokens and the secret live in plugin data like the other
   sources' credentials. Refreshes are serialized so two concurrent refreshes
   cannot invalidate each other, and the new refresh token is persisted before
@@ -351,14 +356,25 @@ Decisions proposed here and open to review before implementation:
   `activity` item (e.g. `07:12 Weight 55.7kg / Fat 15.7% / Muscle 44.4kg / PWV
   6.0m/s`). The window is a starting value to be tuned against real data.
 - **Date range.** The query range is the local calendar day's start and end as
-  Unix timestamps; items are placed on the date using the response `timezone`,
-  not the machine's zone.
+  Unix timestamps, widened by 26 hours on each side (the UTC-12 to UTC+14 span) so a
+  machine in another zone than the Withings account still receives the whole
+  day. Groups are then
+  kept only if their date in the response `timezone`, not the machine's zone,
+  equals the requested date.
 - **Rate limit.** A short in-memory cache keyed by date avoids hitting the
   10-minute limit on date switches and manual refreshes. It is disposable and
   not persisted.
 - **Errors.** Authorization failure/expired refresh token, rate limit (601),
   network/5xx and malformed responses are distinct `WithingsSourceError`
-  kinds, contained to the section.
+  kinds, contained to the section. Only 601, 401 and 293 are verified. For the
+  token endpoint, envelope statuses 500-599 are treated as Withings-side faults
+  (stored tokens kept); every other non-zero status clears the tokens and asks
+  for re-authorization. Whether Withings reports a revoked token inside the
+  500-599 range is unverified.
+- **Cancellation.** A token refresh is not tied to the requesting view's
+  signal: Withings rotates the refresh token as soon as it handles the
+  request, so the response must reach storage even if the view has moved on.
+  Overlapping queries for the same date and account share one request.
 
 Development-phase applications may use HTTP/loopback redirect URIs but are
 capped at 10 users, which is acceptable for per-user applications.
