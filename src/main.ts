@@ -65,6 +65,12 @@ import { DEFAULT_LOCATION_SETTINGS } from "./sources/location/settings";
 import type { LocationSettings } from "./sources/location/settings";
 import { renderLocationSettings } from "./sources/location/settings-tab";
 import type { LocationSettingsHost } from "./sources/location/settings-tab";
+import { GitHubSourceError } from "./sources/github/errors";
+import { GitHubSource } from "./sources/github/github-source";
+import { DEFAULT_GITHUB_SETTINGS } from "./sources/github/settings";
+import type { GitHubSettings } from "./sources/github/settings";
+import { renderGitHubSettings } from "./sources/github/settings-tab";
+import type { GitHubSettingsHost } from "./sources/github/settings-tab";
 import { WithingsAuthManager } from "./sources/withings/auth";
 import type { WithingsAuthPersistence, WithingsTokens } from "./sources/withings/auth";
 import { WithingsSourceError } from "./sources/withings/errors";
@@ -84,6 +90,7 @@ interface DailyInboxPluginData {
   browserHistory: BrowserHistorySettings;
   onThisDay: OnThisDaySettings;
   location: LocationSettings;
+  github: GitHubSettings;
   withings: WithingsSettings;
   withingsTokens?: WithingsTokens;
 }
@@ -139,6 +146,32 @@ function describeLocationError(err: unknown): string {
     }
   }
   return "Unexpected error while querying the location server.";
+}
+
+function describeGitHubError(err: unknown): string {
+  if (err instanceof GitHubSourceError) {
+    switch (err.kind) {
+      case "auth-required":
+        return "GitHub rejected the access token. Check it in Settings → Daily Inbox.";
+      case "invalid-user": {
+        const base = "GitHub could not search the configured username. Check it in Settings → Daily Inbox.";
+        return err.detail ? `${base} GitHub said: ${err.detail}` : base;
+      }
+      case "invalid-query": {
+        const base = "GitHub rejected the search query.";
+        return err.detail ? `${base} GitHub said: ${err.detail}` : base;
+      }
+      case "rate-limited":
+        return "GitHub search rate limit reached. Try again in a minute.";
+      case "incomplete":
+        return "GitHub search timed out with partial results. Try refreshing.";
+      case "transient":
+        return "Could not reach GitHub. Try refreshing.";
+      case "malformed":
+        return "GitHub returned unexpected data.";
+    }
+  }
+  return "Unexpected error while querying GitHub.";
 }
 
 function describeWithingsError(err: unknown): string {
@@ -303,11 +336,12 @@ class DailyInboxView extends ItemView {
     }
     if (state.items.length === 0) {
       el.createEl("p", { text: section.emptyMessage, cls: "daily-inbox-empty" });
-      return;
+    } else {
+      const { images, others } = partitionItems(state.items);
+      if (images.length > 0) this.renderImageGrid(el, images, context);
+      if (others.length > 0) this.renderItemList(el, others, context);
     }
-    const { images, others } = partitionItems(state.items);
-    if (images.length > 0) this.renderImageGrid(el, images, context);
-    if (others.length > 0) this.renderItemList(el, others, context);
+    if (section.note) el.createEl("p", { text: section.note, cls: "daily-inbox-note" });
   }
 
   private renderImageGrid(el: HTMLElement, items: ContextItem[], context: DailyContext): void {
@@ -513,6 +547,13 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
     };
   }
 
+  private get githubHost(): GitHubSettingsHost {
+    return {
+      settings: this.plugin.data.github,
+      saveSettings: () => this.plugin.savePluginData(),
+    };
+  }
+
   private get locationHost(): LocationSettingsHost {
     return {
       settings: this.plugin.data.location,
@@ -527,6 +568,10 @@ class DailyInboxSettingTab extends PluginSettingTab implements DropboxSettingsHo
       this.display();
     });
     renderLocationSettings(this.containerEl, this.locationHost, () => {
+      this.plugin.refreshAllViews();
+      this.display();
+    });
+    renderGitHubSettings(this.containerEl, this.githubHost, () => {
       this.plugin.refreshAllViews();
       this.display();
     });
@@ -552,6 +597,7 @@ export default class DailyInboxPlugin extends Plugin {
     browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS },
     onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS },
     location: { ...DEFAULT_LOCATION_SETTINGS },
+    github: { ...DEFAULT_GITHUB_SETTINGS },
     withings: { ...DEFAULT_WITHINGS_SETTINGS },
   };
   dropboxAuth!: DropboxAuthManager;
@@ -574,6 +620,7 @@ export default class DailyInboxPlugin extends Plugin {
       browserHistory: { ...DEFAULT_BROWSER_HISTORY_SETTINGS, ...loaded?.browserHistory },
       onThisDay: { ...DEFAULT_ON_THIS_DAY_SETTINGS, ...loaded?.onThisDay },
       location: { ...DEFAULT_LOCATION_SETTINGS, ...loaded?.location },
+      github: { ...DEFAULT_GITHUB_SETTINGS, ...loaded?.github },
       withings: { ...DEFAULT_WITHINGS_SETTINGS, ...loaded?.withings },
       withingsTokens: loaded?.withingsTokens,
     };
@@ -697,6 +744,14 @@ export default class DailyInboxPlugin extends Plugin {
         describeUnavailable: () =>
           "Location is not configured. Set the server URL and read token in Settings → Daily Inbox.",
         describeError: describeLocationError,
+      },
+      {
+        source: new GitHubSource(requestUrl, () => this.data.github),
+        emptyMessage: "No GitHub activity for this date.",
+        note: "Commit search covers only each repository's default branch; commits on other branches are not shown.",
+        describeUnavailable: () =>
+          "GitHub is not configured. Set the username and access token in Settings → Daily Inbox.",
+        describeError: describeGitHubError,
       },
       {
         source: this.withingsSource,

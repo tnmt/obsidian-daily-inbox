@@ -19,6 +19,11 @@
   font-style: italic;
 }
 
+.daily-inbox-note {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
 .daily-inbox-error {
   color: var(--text-error);
 }
