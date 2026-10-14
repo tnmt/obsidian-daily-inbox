@@ -6,7 +6,7 @@ set -eu
 
 forbidden='\.(jpe?g|png|heic|heif|gif|webp|tiff?|dng|raw|mov|mp4|m4v|gpx|kml|kmz|geojson|sqlite3?|db|db-wal|db-shm|pem|key|p12|pfx)$|(^|/)(History|Local State|Cookies|Login Data|data\.json|\.env(\..*)?)$|(^|/)\.obsidian/'
 # Notes belong in the vault; only project docs are allowed as Markdown.
-allowed_markdown='^((README|AGENTS|CHANGELOG|CLAUDE|LICENSE)\.md|docs/[^/]+\.md)$'
+allowed_markdown='^((README|AGENTS|CHANGELOG|CLAUDE|LICENSE)\.md|docs/[^/]+\.md|\.claude/skills/[^/]+/SKILL\.md)$'
 
 offending=$(
   sort -u | while IFS= read -r path; do
